@@ -1,0 +1,18 @@
+--- a/jni/tkimg/compat/libtiff/libtiff/tiffconf.h
++++ b/jni/tkimg/compat/libtiff/libtiff/tiffconf.h
+@@ -62,13 +62,13 @@
+ #define PACKBITS_SUPPORT 1
+ 
+ /* Support Pixar log-format algorithm (requires Zlib) */
+-#define PIXARLOG_SUPPORT 1
++/* PIXARLOG_SUPPORT disabled (iwish arm64) */
+ 
+ /* Support ThunderScan 4-bit RLE algorithm */
+ #define THUNDER_SUPPORT 1
+ 
+ /* Support Deflate compression */
+-#define ZIP_SUPPORT 1
++/* ZIP_SUPPORT disabled (iwish arm64) */
+ 
+ /* Support strip chopping (whether or not to convert single-strip uncompressed
+    images to mutiple strips of ~8Kb to reduce memory usage) */

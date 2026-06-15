@@ -1,0 +1,117 @@
+--- a/jni/sdl2tk/sdl/SdlTkInt.c
++++ b/jni/sdl2tk/sdl/SdlTkInt.c
+@@ -4426,6 +4426,81 @@
+     return ret;
+ }
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#if TARGET_OS_OSX || TARGET_OS_MACCATALYST
++#define SDLTK_MAC_POWERINFO 1
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/ps/IOPowerSources.h>
++#include <IOKit/ps/IOPSKeys.h>
++
++/*
++ * On a desktop Mac (undroidwish / iWish-on-Catalyst) SDL_GetPowerInfo
++ * misreports battery -- notably a Mac with no internal battery yields a bogus
++ * low percent, which drove the de1app into its low-battery screensaver.  Query
++ * the authoritative IOKit power-source API instead: returns the real battery
++ * percentage when on battery, or 100 when plugged into AC (or there is no
++ * battery at all, i.e. a desktop Mac).  Sets *onAC and *hasBattery.
++ */
++static int
++SdlTkMacPowerInfo(int *onAC, int *hasBattery)
++{
++    int pct = -1;
++    CFTypeRef blob;
++    CFStringRef ptype;
++    CFArrayRef list;
++
++    *onAC = 0;
++    *hasBattery = 0;
++    blob = IOPSCopyPowerSourcesInfo();
++    if (blob == NULL) {
++	*onAC = 1;		/* can't tell -> assume plugged in */
++	return 100;
++    }
++    ptype = IOPSGetProvidingPowerSourceType(blob);
++    if (ptype != NULL && CFEqual(ptype, CFSTR(kIOPSACPowerValue))) {
++	*onAC = 1;
++    }
++    list = IOPSCopyPowerSourcesList(blob);
++    if (list != NULL) {
++	CFIndex i, n = CFArrayGetCount(list);
++
++	for (i = 0; i < n; i++) {
++	    CFDictionaryRef d =
++		IOPSGetPowerSourceDescription(blob, CFArrayGetValueAtIndex(list, i));
++	    CFNumberRef ncur, nmax;
++	    CFStringRef st;
++	    int cur = 0, max = 0;
++
++	    if (d == NULL) {
++		continue;
++	    }
++	    ncur = (CFNumberRef) CFDictionaryGetValue(d, CFSTR(kIOPSCurrentCapacityKey));
++	    nmax = (CFNumberRef) CFDictionaryGetValue(d, CFSTR(kIOPSMaxCapacityKey));
++	    if (ncur != NULL) CFNumberGetValue(ncur, kCFNumberIntType, &cur);
++	    if (nmax != NULL) CFNumberGetValue(nmax, kCFNumberIntType, &max);
++	    if (max > 0) {
++		pct = (cur * 100) / max;
++		*hasBattery = 1;
++	    }
++	    st = (CFStringRef) CFDictionaryGetValue(d, CFSTR(kIOPSPowerSourceStateKey));
++	    if (st != NULL && CFEqual(st, CFSTR(kIOPSACPowerValue))) {
++		*onAC = 1;
++	    }
++	    break;		/* first battery is enough */
++	}
++	CFRelease(list);
++    }
++    CFRelease(blob);
++    if (!*hasBattery) {
++	*onAC = 1;		/* no battery -> desktop on wall power */
++	pct = 100;
++    }
++    return pct;
++}
++#endif
++#endif
++
+ static int
+ PowerinfoObjCmd(ClientData clientData, Tcl_Interp *interp,
+ 		int objc, Tcl_Obj *const objv[])
+@@ -4438,9 +4513,32 @@
+ 	Tcl_WrongNumArgs(interp, 1, objv, "");
+ 	return TCL_ERROR;
+     }
++    secs = -1;
++    pct = -1;
++#ifdef SDLTK_MAC_POWERINFO
++    {
++	int onAC = 0, hasBat = 0;
++	int real = SdlTkMacPowerInfo(&onAC, &hasBat);
++
++	if (onAC || !hasBat) {
++	    /* Plugged into power (or no battery): report full. */
++	    pct = 100;
++	    if (!hasBat) {
++		pst = SDL_POWERSTATE_NO_BATTERY;
++	    } else {
++		pst = (real >= 100) ? SDL_POWERSTATE_CHARGED : SDL_POWERSTATE_CHARGING;
++	    }
++	} else {
++	    /* Running on battery: report the real level. */
++	    pct = (real < 0) ? 100 : real;
++	    pst = SDL_POWERSTATE_ON_BATTERY;
++	}
++    }
++#else
+     SdlTkLock(NULL);
+     pst = SDL_GetPowerInfo(&secs, &pct);
+     SdlTkUnlock(NULL);
++#endif
+     Tcl_AppendElement(interp, "state");
+     switch (pst) {
+     case SDL_POWERSTATE_ON_BATTERY:

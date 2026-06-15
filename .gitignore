@@ -1,0 +1,6 @@
+*.o
+*.a
+*.lo
+build.log
+build-run*.log
+.DS_Store

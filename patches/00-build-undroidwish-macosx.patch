@@ -1,0 +1,69 @@
+--- a/undroid/build-undroidwish-macosx.sh
++++ b/undroid/build-undroidwish-macosx.sh
+@@ -79,12 +79,31 @@
+ STRIP="strip -S -x"
+ AR=ar
+ RANLIB=ranlib
+-CC="cc -DTCL_UTF_MAX=6 -mmacosx-version-min=10.10"
+-CXX="c++ -fno-exceptions -fno-rtti -DTCL_UTF_MAX=6 -mmacosx-version-min=10.10"
++CC="cc -DTCL_UTF_MAX=6 -mmacosx-version-min=11.0 -Wno-implicit-int -Wno-implicit-function-declaration -Wno-int-conversion -Wno-error=incompatible-function-pointer-types -Wno-error=incompatible-pointer-types"
++CXX="c++ -fno-exceptions -fno-rtti -DTCL_UTF_MAX=6 -mmacosx-version-min=11.0"
+ NM=nm
+ # RPATH for binaries
+ ADD_RPATH="/Applications/VLC.app/Contents/MacOS/lib"
+ export STRIP AR RANLIB CC CXX NM ADD_RPATH
++# Modern clang (21) aborts on SIGPIPE during ancient autoconf-2.13 "cc -E | grep"
++# probe tests, which poisons size_t/pid_t/sizeof detection (-> "#define size_t
++# unsigned" cascade). Pre-seed correct cache values for arm64 macOS so those
++# tests are skipped. Harmless to modern TEA configures.
++ac_cv_type_size_t=yes
++ac_cv_type_pid_t=yes
++ac_cv_sizeof_int=4
++ac_cv_sizeof_long=8
++ac_cv_sizeof_long_long=8
++ac_cv_sizeof_void_p=8
++export ac_cv_type_size_t ac_cv_type_pid_t
++export ac_cv_sizeof_int ac_cv_sizeof_long ac_cv_sizeof_long_long ac_cv_sizeof_void_p
++# Ensure the real system grep/egrep/sed are used: a dangling Homebrew egrep shim
++# (/usr/local/bin/egrep -> gnuegrep -> exec gnugrep, which is absent) silently
++# returns nothing and poisoned configures (e.g. mpexpr's MPEXPR_VERSION came out
++# empty -> broken pkgIndex.tcl).
++PATH=/usr/bin:$PATH
++export PATH
++
+ SUBDIRS="tcl libressl zlib curl tcludp tdom tclvfs tclkit trofs tbcload"
+ SUBDIRS="${SUBDIRS} tls libwebsockets"
+ SUBDIRS="${SUBDIRS} Memchan TclCurl freetype SDL2 sdl2tk blt jpeg-turbo"
+@@ -411,7 +430,7 @@
+     --without-libidn2 --without-nghttp2 --without-zsh-functions-dir \
+     --without-librtmp --without-libssh2 --without-libpsl --without-nghttp3 \
+     --without-nss --without-amissl --without-bearssl --without-mbedtls \
+-    --without-gnutls --without-brotli --without-rustls \
++    --without-gnutls --without-brotli --without-rustls --without-zstd \
+     --without-openssl --without-nss --without-wolfssl --without-schannel \
+     --with-secure-transport --with-zlib=${HERE}/zlib
+   # shrink SUBDIRS
+@@ -625,7 +644,7 @@
+     ./configure --prefix=${PFX_HERE} \
+       --disable-shared --disable-arts --disable-esd --disable-nas \
+       --disable-ibus --enable-alsa --disable-video-x11 \
+-      --disable-rpath --disable-video-opengles2 \
++      --disable-rpath --disable-video-opengles --disable-video-opengles2 \
+       --disable-video-vulkan --enable-video-jsmpeg || exit 1
+   make || exit 1
+   make install || exit 1
+@@ -727,11 +746,10 @@
+   cd jpeg-turbo
+   test -e build-stamp && echo >&3 "already done" && exit 0
+   chmod a+x ./configure
++  # libjpeg-turbo 1.4.2 has no aarch64 NEON SIMD; the simd/ path is x86 (nasm
++  # -fmacho) only. Build the plain C library on arm64.
+   ./configure --prefix=${PFX} --with-jpeg8 \
+-    --enable-static --disable-shared --with-pic --with-mem-srcdst
+-  # why the heck is this needed? Machismo?
+-  perl -pi -e 's/-fmacho/--prefix _ -fmacho/g' simd/Makefile
+-  make -C simd libsimd.la || exit 1
++    --enable-static --disable-shared --with-pic --with-mem-srcdst --without-simd
+   make libjpeg.la || exit 1
+   cp -p .libs/libjpeg.a .
+   touch build-stamp

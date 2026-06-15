@@ -1,0 +1,17 @@
+--- a/jni/tkimg/compat/libpng/pngpriv.h
++++ b/jni/tkimg/compat/libpng/pngpriv.h
+@@ -127,12 +127,9 @@
+     * associated assembler code, pass --enable-arm-neon=no to configure
+     * or put -DPNG_ARM_NEON_OPT=0 in CPPFLAGS.
+     */
+-#  if (defined(__ARM_NEON__) || defined(__ARM_NEON)) && \
+-   defined(PNG_ALIGNED_MEMORY_SUPPORTED)
+-#     define PNG_ARM_NEON_OPT 2
+-#  else
++   /* iwish/arm64: pngtcl does not compile arm/arm_init.c, so the NEON impl
++    * (png_init_filter_functions_neon) is undefined at load time. Force NEON off. */
+ #     define PNG_ARM_NEON_OPT 0
+-#  endif
+ #endif
+ 
+ #if PNG_ARM_NEON_OPT > 0

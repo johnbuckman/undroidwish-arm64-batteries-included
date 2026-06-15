@@ -1,0 +1,20 @@
+--- a/jni/SDL2/configure
++++ b/jni/SDL2/configure
+@@ -19050,7 +19050,7 @@
+     CFLAGS="$save_CFLAGS"
+ 
+     if test x$have_gcc_declaration_after_statement = xyes; then
+-        EXTRA_CFLAGS="$EXTRA_CFLAGS -Wdeclaration-after-statement -Werror=declaration-after-statement"
++        EXTRA_CFLAGS="$EXTRA_CFLAGS -Wno-error=declaration-after-statement"
+     fi
+ }
+ 
+@@ -24352,7 +24352,7 @@
+         SOURCES="$srcdir/src/main/haiku/*.cc $SOURCES"
+         EXTRA_LDFLAGS="$EXTRA_LDFLAGS -lroot -lbe -lmedia -lgame -ldevice -ltextencoding"
+         ;;
+-    arm*-apple-darwin*|*-ios-*)
++    *-ios-* | *-iphoneos-*)
+         ARCH=ios
+ 
+         CheckVisibilityHidden
