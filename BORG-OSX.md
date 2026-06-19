@@ -57,23 +57,23 @@ The per-platform fills:
 
 ### Keys, per platform
 
-| key | Android (e.g. Teclast) | macOS desktop (undroidwish) | iWish — iOS device | iWish — iOS simulator | iWish — Mac Catalyst |
-|---|---|---|---|---|---|
-| `manufacturer` | device maker (`Teclast`) | `Apple` | `Apple` | `Apple` | `Apple` |
-| `brand` | device brand | `Apple` | `Apple` | `Apple` | `Apple` |
-| `product` | build product (`M50Mini`) | **`undroidwish`** | **`iWish`** | **`iWish`** | **`iWish`** |
-| `model` | `M50Mini` | `Mac16,12` (`hw.model`) | `iPad13,1` (`hw.machine`) | `iPad13,1` (`SIMULATOR_MODEL_IDENTIFIER`) | `Mac16,12` (`hw.model`) |
-| `device` | `M50Mini` | = model | = model | = model | = model |
-| `cpu_abi` | `arm64-v8a` | `arm64` (`hw.machine`) | `arm64` | `arm64` | `arm64` |
-| `version.release` | `14` (Android) | `26.2` (`kern.osproductversion`) | iOS ver (`UIDevice.systemVersion`) | iOS ver | iOS-compat ver |
-| `version.sdk` | `34` (API level) | `0` (n/a) | `0` | `0` | `0` |
-| `board` | `mt6771` | `hw.target` | = model | = model | = model |
-| `hardware` | `mt8788` | `Apple M4` (cpu brand) | = model | = model | = model |
-| `fingerprint` | Android format | `Apple/undroidwish/<model>:<rel>/<darwin>/0:user/release-keys` | `Apple/iWish/<model>:<rel>/0:user/release-keys` | same form | same form |
-| `serial` | `unknown` | `unknown` | `unknown` | `unknown` | `unknown` |
-| `version.codename`/`tags`/`type` | `REL`/`release-keys`/`user` | same | same | same | same |
-| `version.incremental`/`id`/`display` | Android build ids | `kern.osversion` (Darwin, e.g. `25C56`) | — | — | — |
-| `bootloader`/`cpu_abi2`/`radio`/`time` | device values | empty / `0` | empty / `0` | empty / `0` | empty / `0` |
+| key | Android (e.g. Teclast) | macOS desktop (undroidwish) | iWish — iOS device | iWish — Mac Catalyst |
+|---|---|---|---|---|
+| `manufacturer` | device maker (`Teclast`) | `Apple` | `Apple` | `Apple` |
+| `brand` | device brand | `Apple` | `Apple` | `Apple` |
+| `product` | build product (`M50Mini`) | **`undroidwish`** | **`iWish`** | **`iWish`** |
+| `model` | `M50Mini` | `Mac16,12` (`hw.model`) | `iPad13,1` (`hw.machine`) | `Mac16,12` (`hw.model`) |
+| `device` | `M50Mini` | = model | = model | = model |
+| `cpu_abi` | `arm64-v8a` | `arm64` (`hw.machine`) | `arm64` | `arm64` |
+| `version.release` | `14` (Android) | `26.2` (`kern.osproductversion`) | iOS ver (`UIDevice.systemVersion`) | iOS-compat ver |
+| `version.sdk` | `34` (API level) | `0` (n/a) | `0` | `0` |
+| `board` | `mt6771` | `hw.target` | = model | = model |
+| `hardware` | `mt8788` | `Apple M4` (cpu brand) | = model | = model |
+| `fingerprint` | Android format | `Apple/undroidwish/<model>:<rel>/<darwin>/0:user/release-keys` | `Apple/iWish/<model>:<rel>/0:user/release-keys` | same form |
+| `serial` | `unknown` | `unknown` | `unknown` | `unknown` |
+| `version.codename`/`tags`/`type` | `REL`/`release-keys`/`user` | same | same | same |
+| `version.incremental`/`id`/`display` | Android build ids | `kern.osversion` (Darwin, e.g. `25C56`) | — | — |
+| `bootloader`/`cpu_abi2`/`radio`/`time` | device values | empty / `0` | empty / `0` | empty / `0` |
 
 ### How a caller identifies the platform
 
