@@ -28,11 +28,10 @@ It builds as a **loadable Tcl stubs package** (`package require Borg`) bundled
 into `assets.zip` — the same mechanism undroidwish already uses for all its
 batteries.
 
-### Platform identified from standard `osbuildinfo` keys, not `borg platform`
+### Platform identified from standard `osbuildinfo` keys
 
-`platform` was a non-standard de1app/iWish subcommand. Instead of adding it (or a
-custom key), this port fills the **existing** Android-shaped `osbuildinfo` keys
-with real Apple values, and callers identify the platform from those:
+This port fills the **existing** Android-shaped `osbuildinfo` keys with real
+Apple values, and callers identify the platform from those:
 
 - **`manufacturer`** = `Apple` → an Apple build (Android reports the device maker).
 - **`product`** = `undroidwish` here, `iWish` from the iWish iOS/Catalyst borg →
@@ -42,7 +41,7 @@ with real Apple values, and callers identify the platform from those:
   hardware from Mac.
 
 So de1app sets `::iwish` from `product eq "iWish"` and `::ios` from an
-iPad/iPhone/iPod `model`, with no non-standard subcommand or extra key.
+iPad/iPhone/iPod `model`. Full key reference and per-platform values are below.
 
 ---
 
@@ -51,8 +50,10 @@ iPad/iPhone/iPod `model`, with no non-standard subcommand or extra key.
 `borg osbuildinfo` returns a flat Tcl dict modeled on Android's
 `android.os.Build.*`. Every AndroWish-family build fills these **standard keys**
 with real values for its platform, so callers identify the platform from the
-existing keys — no non-standard `borg platform` subcommand and no custom `os`
-key.
+existing keys alone — no extra/custom key is added.
+
+Real values are all available (`sysctl` on Mac, `UIDevice`/`hw.machine` on iOS).
+The per-platform fills:
 
 ### Keys, per platform
 
@@ -97,9 +98,8 @@ set ios [expr {$apple && [dict exists $bi model] \
 
 ### Rationale / gotchas
 
-- **No `borg platform`, no custom `os` key** — only the standard keys. (`borg
-  platform` was a non-standard de1app/iWish extension, now removed; relying on it
-  was fragile because *which* borg is loaded varied between builds.)
+- **Standard keys only** — no custom/extra key is added; the platform is read
+  entirely from the values above.
 - **`product` carries the build identity** (`undroidwish` vs `iWish`). Necessary
   because Catalyst-iWish and desktop-undroidwish run on **identical Mac hardware**
   (same `model`/`manufacturer`/`version.release`) — only the app differs.
