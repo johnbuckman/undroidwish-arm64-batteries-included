@@ -1,6 +1,7 @@
+diff --git a/undroid/build-undroidwish-macosx.sh b/undroid/build-undroidwish-macosx.sh
 --- a/undroid/build-undroidwish-macosx.sh
 +++ b/undroid/build-undroidwish-macosx.sh
-@@ -79,12 +79,31 @@
+@@ -79,12 +79,30 @@ echo
  STRIP="strip -S -x"
  AR=ar
  RANLIB=ranlib
@@ -30,11 +31,10 @@
 +# empty -> broken pkgIndex.tcl).
 +PATH=/usr/bin:$PATH
 +export PATH
-+
+ 
  SUBDIRS="tcl libressl zlib curl tcludp tdom tclvfs tclkit trofs tbcload"
  SUBDIRS="${SUBDIRS} tls libwebsockets"
- SUBDIRS="${SUBDIRS} Memchan TclCurl freetype SDL2 sdl2tk blt jpeg-turbo"
-@@ -411,7 +430,7 @@
+@@ -412,7 +430,7 @@ echo -n "build curl (static, pic) ... "
      --without-libidn2 --without-nghttp2 --without-zsh-functions-dir \
      --without-librtmp --without-libssh2 --without-libpsl --without-nghttp3 \
      --without-nss --without-amissl --without-bearssl --without-mbedtls \
@@ -43,7 +43,7 @@
      --without-openssl --without-nss --without-wolfssl --without-schannel \
      --with-secure-transport --with-zlib=${HERE}/zlib
    # shrink SUBDIRS
-@@ -625,7 +644,7 @@
+@@ -626,7 +644,7 @@ echo -n "build SDL2 (static, pic) ... "
      ./configure --prefix=${PFX_HERE} \
        --disable-shared --disable-arts --disable-esd --disable-nas \
        --disable-ibus --enable-alsa --disable-video-x11 \
@@ -52,7 +52,7 @@
        --disable-video-vulkan --enable-video-jsmpeg || exit 1
    make || exit 1
    make install || exit 1
-@@ -727,11 +746,10 @@
+@@ -728,11 +746,10 @@ echo -n "build jpeg-turbo (static, pic) ... "
    cd jpeg-turbo
    test -e build-stamp && echo >&3 "already done" && exit 0
    chmod a+x ./configure

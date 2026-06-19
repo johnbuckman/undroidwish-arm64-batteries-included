@@ -1,0 +1,42 @@
+diff --git a/jni/tkimg/compat/libtiff/libtiff/tif_config.h.in b/jni/tkimg/compat/libtiff/libtiff/tif_config.h.in
+index 96a5bfb9..728cc79e 100644
+--- a/jni/tkimg/compat/libtiff/libtiff/tif_config.h.in
++++ b/jni/tkimg/compat/libtiff/libtiff/tif_config.h.in
+@@ -187,7 +187,7 @@
+ #undef PACKBITS_SUPPORT
+ 
+ /* Support Pixar log-format algorithm (requires Zlib) */
+-#undef PIXARLOG_SUPPORT
++/* PIXARLOG_SUPPORT left undefined: codec source not compiled (undroidwish arm64) */
+ 
+ /* Define to necessary symbol if this constant uses a non-standard name on
+    your system. */
+@@ -264,7 +264,7 @@
+ #undef X_DISPLAY_MISSING
+ 
+ /* Support Deflate compression */
+-#undef ZIP_SUPPORT
++/* ZIP_SUPPORT left undefined: codec source not compiled (undroidwish arm64) */
+ 
+ /* Enable large inode numbers on Mac OS X 10.5.  */
+ #ifndef _DARWIN_USE_64_BIT_INODE
+diff --git a/jni/tkimg/compat/libtiff/libtiff/tiffconf.h.in b/jni/tkimg/compat/libtiff/libtiff/tiffconf.h.in
+index 1a52b37a..39d5fbcd 100644
+--- a/jni/tkimg/compat/libtiff/libtiff/tiffconf.h.in
++++ b/jni/tkimg/compat/libtiff/libtiff/tiffconf.h.in
+@@ -61,13 +61,13 @@
+ #undef PACKBITS_SUPPORT
+ 
+ /* Support Pixar log-format algorithm (requires Zlib) */
+-#undef PIXARLOG_SUPPORT
++/* PIXARLOG_SUPPORT left undefined: codec source not compiled (undroidwish arm64) */
+ 
+ /* Support ThunderScan 4-bit RLE algorithm */
+ #undef THUNDER_SUPPORT
+ 
+ /* Support Deflate compression */
+-#undef ZIP_SUPPORT
++/* ZIP_SUPPORT left undefined: codec source not compiled (undroidwish arm64) */
+ 
+ /* Support strip chopping (whether or not to convert single-strip uncompressed
+    images to mutiple strips of ~8Kb to reduce memory usage) */

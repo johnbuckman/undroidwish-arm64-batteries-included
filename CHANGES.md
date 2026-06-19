@@ -128,15 +128,21 @@ references the NEON filter init), but `pngtcl`'s Makefile does **not** compile
 `PNG_ARM_NEON_OPT 0` in `compat/libpng/pngpriv.h` (libpng's own documented
 workaround). x86 never used NEON, so it never hit this.
 
-### C4. tkimg / libtiff — undefined codec inits (`patches/03-*`)
+### C4. tkimg / libtiff — undefined codec inits (`patches/03-tkimg-libtiff-disable-codecs.patch`)
 After the libpng fix, `Img` then failed with
 `symbol not found ... '_TIFFInitPixarLog'`. libtiff's config enables
 `PIXARLOG_SUPPORT` and `ZIP_SUPPORT`, so `tif_codec.c` registers
 `TIFFInitPixarLog`/`TIFFInitZIP`, but `tifftcl`'s Makefile compiles only 31 of
 44 `tif_*.c` and **omits `tif_pixarlog.c`/`tif_zip.c`** → undefined. Fix:
-disable those two codecs in `tiffconf.h` and `tif_config.h` (TIFF
-deflate/PixarLog compression off; PNG/GIF/JPEG/uncompressed/LZW/PackBits/Fax
-TIFF all still work). With both C3 and C4, `Img 1.4.11` loads.
+disable those two codecs **in the tracked autoheader templates
+`tiffconf.h.in` and `tif_config.h.in`** — replace their `#undef
+PIXARLOG_SUPPORT` / `#undef ZIP_SUPPORT` lines with comments so `configure`
+cannot define them in the generated `tiffconf.h`/`tif_config.h`. (Earlier this
+was done by hand-editing the *generated* headers, but those don't exist in a
+fresh checkout, so the patch couldn't apply via `apply-patches.sh`; patching the
+`.in` templates is source-level and timing-independent.) TIFF deflate/PixarLog
+compression off; PNG/GIF/JPEG/uncompressed/LZW/PackBits/Fax TIFF all still work.
+With both C3 and C4, `Img 1.4.11` loads.
 
 ---
 
@@ -211,15 +217,45 @@ the environment can compromise the build".
 
 ---
 
+## G. Desktop `borg` command (`patches/05`, `patches/06`)
+
+Stock undroidwish is "AndroWish sans the borg": the Android `borg`
+(`jni/src/tkBorg.c`, a ~6900-line JNI bridge) is not compiled in, so AndroWish
+code that calls `borg …` fails with *invalid command name "borg"*.
+
+**G1** New file **`jni/src/tkBorgOSX.c`** — a self-contained, `__APPLE__`-guarded
+reimplementation of `borg` for the macOS desktop, built as a loadable Tcl stubs
+package (`package require Borg`). Its subcommand surface matches the documented
+Android command exactly; every documented subcommand exists and never raises a
+Tcl error on a well-formed call. Native where macOS maps (`say`, `open`,
+`osascript`, IOKit USB, CoreGraphics display metrics, sysctl device/OS info,
+`getifaddrs` network state, `DisplayServices` brightness via `dlopen`, a typed
+file-backed `sharedpreferences` store, a Tk toast/spinner); safe Android-shaped
+no-ops where there is no analog (NFC, telephony, content providers, intents,
+sensors, camera, location). Uses only already-linked frameworks (CoreFoundation,
+CoreGraphics, IOKit) plus standard CLI tools via `posix_spawn` — no new hard
+dependency. Per-command status: [`BORG-OSX.md`](BORG-OSX.md).
+
+**G2** Build-script wiring: a `build borg` step compiles `tkBorgOSX.c` into
+`${PFX_HERE}/lib/Borg1.0/` with a `pkgIndex.tcl`, and the assets-assembly step
+copies `Borg*` into `assets.zip`.
+
+Verified on Apple Silicon (macOS 26 / Darwin 25): all documented subcommands
+load and run; native commands return correct data; malformed calls still report
+the usual `wrong # args` / `bad option` diagnostics.
+
+---
+
 ## Summary of files touched
 
 | file | change |
 |------|--------|
-| `undroid/build-undroidwish-macosx.sh` | A1–A4, C1, C2 |
+| `undroid/build-undroidwish-macosx.sh` | A1–A4, C1, C2, G2 |
 | `jni/SDL2/configure` | B (iOS→macOS branch), declaration-after-statement |
 | `jni/tkimg/compat/libpng/pngpriv.h` | C3 (NEON off) |
-| `jni/tkimg/compat/libtiff/libtiff/{tiffconf.h,tif_config.h}` | C4 (codecs off) |
+| `jni/tkimg/compat/libtiff/libtiff/{tiffconf.h,tif_config.h}.in` | C4 (codecs off, via templates) |
 | `jni/sdl2tk/sdl/SdlTkInt.c` | D1 (powerinfo via IOKit) |
+| `jni/src/tkBorgOSX.c` | G1 (new — desktop `borg` for macOS) |
 
 The result runs natively on Apple Silicon (verified: `tclsh8.6`/`wish` report
 `arm64`; Tcl regression suite passes — 46090 tests, 1 environment-only failure).

@@ -1,0 +1,1601 @@
+diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
+new file mode 100644
+index 00000000..830ed2e9
+--- /dev/null
++++ b/jni/src/tkBorgOSX.c
+@@ -0,0 +1,1595 @@
++/*
++ * tkBorgOSX.c --
++ *
++ *	macOS (desktop) implementation of the "borg" Tcl command for
++ *	undroidwish.  AndroWish's borg command (tkBorg.c) is a JNI bridge to
++ *	the Android framework and is deliberately omitted from undroidwish
++ *	("AndroWish sans the borg").  This file provides a drop-in borg
++ *	command for the macOS desktop build whose subcommand surface matches
++ *	the documented Android command exactly (see
++ *	https://androwish.org/home/wiki?name=Android+facilities).
++ *
++ *	Design goals, in order:
++ *	  1. Every documented subcommand exists and NEVER raises a Tcl error
++ *	     for a well-formed call -- subcommands with no macOS analog are
++ *	     safe no-ops returning an empty string (or the Android-shaped
++ *	     "empty" value), so unmodified AndroWish/de1app code runs.
++ *	  2. Subcommands that DO map onto a native macOS facility get a real
++ *	     best-effort implementation using only system facilities already
++ *	     available to the build (libc, Tcl/Tk, CoreFoundation, IOKit,
++ *	     CoreGraphics) plus standard command-line tools (say, open,
++ *	     osascript) launched via posix_spawn.  No new hard link
++ *	     dependency on a private framework: DisplayServices (for screen
++ *	     brightness) is reached lazily via dlopen.
++ *
++ *	This is intended as a patch submittable to the AndroWish maintainer;
++ *	it is guarded for __APPLE__ and is self-contained.
++ *
++ * Copyright (c) 2026 John Buckman.
++ *
++ * See the file "license.terms" for information on usage and redistribution of
++ * this file, and for a DISCLAIMER OF ALL WARRANTIES.
++ */
++
++#include <tcl.h>
++
++/*
++ * Note: we deliberately do NOT include tkBorg.h here -- on Android it pulls in
++ * <jni.h>.  The Borg_Init prototype is declared locally so this file builds as
++ * a self-contained desktop Tcl extension.
++ */
++#ifndef Borg_Init
++EXTERN int Borg_Init(Tcl_Interp *interp);
++#endif
++
++#ifdef __APPLE__
++
++#include <stddef.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <signal.h>
++#include <spawn.h>
++#include <errno.h>
++#include <dlfcn.h>
++#include <locale.h>
++#include <sys/sysctl.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <ifaddrs.h>
++#include <net/if.h>
++#include <netinet/in.h>
++
++#include <CoreFoundation/CoreFoundation.h>
++#include <CoreGraphics/CoreGraphics.h>
++#include <IOKit/IOKitLib.h>
++#include <IOKit/usb/IOUSBLib.h>
++
++extern char **environ;
++
++/*
++ *----------------------------------------------------------------------
++ * Small process helpers.
++ *----------------------------------------------------------------------
++ */
++
++/*
++ * Launch argv detached (fire-and-forget).  Returns the child pid, or -1 on
++ * failure.  argv must be NULL-terminated.
++ */
++static pid_t
++BorgSpawn(const char *const argv[])
++{
++    pid_t pid = -1;
++    posix_spawn_file_actions_t fa;
++    posix_spawn_file_actions_t *fap = NULL;
++
++    if (posix_spawn_file_actions_init(&fa) == 0) {
++	/* Silence the child's stdout/stderr so it never pollutes ours. */
++	posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null",
++					 O_WRONLY, 0);
++	posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null",
++					 O_WRONLY, 0);
++	fap = &fa;
++    }
++    if (posix_spawnp(&pid, argv[0], fap, NULL, (char *const *) argv,
++		     environ) != 0) {
++	pid = -1;
++    }
++    if (fap != NULL) {
++	posix_spawn_file_actions_destroy(&fa);
++    }
++    /*
++     * Reap eventually: detach by ignoring; the global SIGCHLD disposition of
++     * the wish process already reaps, but to be safe we double-fork-free by
++     * not tracking.  A short waitpid(WNOHANG) is intentionally omitted so we
++     * do not block.
++     */
++    return pid;
++}
++
++/*
++ * Run a command line and capture its trimmed stdout into a freshly allocated
++ * Tcl_Obj (refcount 0), or NULL on failure.  Uses Tcl's [exec] so quoting and
++ * pipe handling are correct and the interp result is restored afterwards.
++ */
++static Tcl_Obj *
++BorgCapture(Tcl_Interp *interp, int argc, const char *const argv[])
++{
++    Tcl_Obj *cmd, *saved, *result = NULL;
++    int i, code;
++
++    cmd = Tcl_NewListObj(0, NULL);
++    Tcl_ListObjAppendElement(NULL, cmd, Tcl_NewStringObj("exec", -1));
++    for (i = 0; i < argc; i++) {
++	Tcl_ListObjAppendElement(NULL, cmd, Tcl_NewStringObj(argv[i], -1));
++    }
++    Tcl_IncrRefCount(cmd);
++    saved = Tcl_GetObjResult(interp);
++    Tcl_IncrRefCount(saved);
++    code = Tcl_EvalObjEx(interp, cmd, TCL_EVAL_DIRECT);
++    if (code == TCL_OK) {
++	result = Tcl_DuplicateObj(Tcl_GetObjResult(interp));
++    }
++    Tcl_SetObjResult(interp, saved);
++    Tcl_DecrRefCount(saved);
++    Tcl_DecrRefCount(cmd);
++    return result;
++}
++
++/*
++ * Evaluate a snippet of Tcl ignoring errors (best-effort UI helpers etc.).
++ */
++static void
++BorgEvalIgnore(Tcl_Interp *interp, const char *script)
++{
++    Tcl_Obj *saved = Tcl_GetObjResult(interp);
++
++    Tcl_IncrRefCount(saved);
++    (void) Tcl_EvalEx(interp, script, -1, TCL_EVAL_DIRECT);
++    Tcl_SetObjResult(interp, saved);
++    Tcl_DecrRefCount(saved);
++}
++
++/*
++ *----------------------------------------------------------------------
++ * Embedded Tk helpers for toast / spinner.  Sourced lazily on first use;
++ * become no-ops if Tk is not present.
++ *----------------------------------------------------------------------
++ */
++
++static const char borgTkHelpers[] =
++"namespace eval ::borg::ui {}\n"
++"proc ::borg::ui::toast {text {long 0}} {\n"
++"  if {[catch {package present Tk}]} { return }\n"
++"  catch {destroy ._borgtoast}\n"
++"  set t [toplevel ._borgtoast -bg black -bd 0 -highlightthickness 0]\n"
++"  catch {wm overrideredirect $t 1}\n"
++"  catch {wm attributes $t -topmost 1}\n"
++"  catch {wm attributes $t -alpha 0.85}\n"
++"  label $t.l -text $text -fg white -bg black -padx 24 -pady 14\n"
++"  pack $t.l\n"
++"  update idletasks\n"
++"  set sw [winfo screenwidth $t]; set sh [winfo screenheight $t]\n"
++"  set w [winfo reqwidth $t.l]; set h [winfo reqheight $t.l]\n"
++"  catch {wm geometry $t +[expr {($sw-$w)/2}]+[expr {int($sh*0.8)}]}\n"
++"  after [expr {$long ? 3500 : 2000}] [list destroy $t]\n"
++"}\n"
++"proc ::borg::ui::spinner {on} {\n"
++"  if {[catch {package present Tk}]} { return }\n"
++"  if {$on} { catch {. configure -cursor watch} } else { catch {. configure -cursor {}} }\n"
++"  catch {update idletasks}\n"
++"}\n";
++
++static int borgTkHelpersLoaded = 0;
++
++static void
++BorgEnsureTkHelpers(Tcl_Interp *interp)
++{
++    if (!borgTkHelpersLoaded) {
++	BorgEvalIgnore(interp, borgTkHelpers);
++	borgTkHelpersLoaded = 1;
++    }
++}
++
++/*
++ *----------------------------------------------------------------------
++ * Speech via the macOS "say" command.  We track the last spoken pid so
++ * stopspeak / isspeaking / endspeak work.
++ *----------------------------------------------------------------------
++ */
++
++static pid_t borgSayPid = 0;
++
++static int
++BorgSpeak(Tcl_Interp *interp, const char *text, const char *rate)
++{
++    const char *argv[6];
++    int n = 0;
++    char ratebuf[32];
++
++    /* Stop any current utterance first (Android replaces by default). */
++    if (borgSayPid > 0 && kill(borgSayPid, 0) == 0) {
++	kill(borgSayPid, SIGTERM);
++    }
++    argv[n++] = "say";
++    if (rate != NULL && rate[0] != '\0') {
++	/*
++	 * Android speak rate is a multiplier around 1.0; "say" wants words
++	 * per minute (default ~175).  Map multiplier -> wpm when it looks
++	 * like a small float, else pass through as wpm.
++	 */
++	double r = atof(rate);
++	int wpm;
++	if (r > 0.0 && r <= 4.0) {
++	    wpm = (int)(r * 175.0);
++	} else {
++	    wpm = (int) r;
++	}
++	if (wpm >= 40 && wpm <= 600) {
++	    snprintf(ratebuf, sizeof(ratebuf), "%d", wpm);
++	    argv[n++] = "-r";
++	    argv[n++] = ratebuf;
++	}
++    }
++    argv[n++] = text;
++    argv[n] = NULL;
++    borgSayPid = BorgSpawn(argv);
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * Notification via osascript "display notification".
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgNotify(Tcl_Interp *interp, const char *title, const char *text)
++{
++    Tcl_DString script;
++    const char *argv[5];
++    const char *p;
++
++    /* Build: display notification "TEXT" with title "TITLE" */
++    Tcl_DStringInit(&script);
++    Tcl_DStringAppend(&script, "display notification \"", -1);
++    for (p = (text ? text : ""); *p; p++) {
++	if (*p == '"' || *p == '\\') {
++	    Tcl_DStringAppend(&script, "\\", 1);
++	}
++	Tcl_DStringAppend(&script, p, 1);
++    }
++    Tcl_DStringAppend(&script, "\" with title \"", -1);
++    for (p = (title ? title : "AndroWish"); *p; p++) {
++	if (*p == '"' || *p == '\\') {
++	    Tcl_DStringAppend(&script, "\\", 1);
++	}
++	Tcl_DStringAppend(&script, p, 1);
++    }
++    Tcl_DStringAppend(&script, "\"", -1);
++
++    argv[0] = "osascript";
++    argv[1] = "-e";
++    argv[2] = Tcl_DStringValue(&script);
++    argv[3] = NULL;
++    (void) BorgSpawn(argv);
++    Tcl_DStringFree(&script);
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * Screen brightness via the private DisplayServices framework (dlopen'd),
++ * which is the only reliable absolute brightness API on Apple Silicon.
++ *----------------------------------------------------------------------
++ */
++
++typedef int (*DSGetBrightnessFn)(CGDirectDisplayID, float *);
++typedef int (*DSSetBrightnessFn)(CGDirectDisplayID, float);
++
++static int
++BorgBrightnessFns(DSGetBrightnessFn *getp, DSSetBrightnessFn *setp)
++{
++    static int tried = 0;
++    static DSGetBrightnessFn getfn = NULL;
++    static DSSetBrightnessFn setfn = NULL;
++
++    if (!tried) {
++	void *h = dlopen("/System/Library/PrivateFrameworks/"
++			 "DisplayServices.framework/DisplayServices", RTLD_LAZY);
++	if (h != NULL) {
++	    getfn = (DSGetBrightnessFn) dlsym(h, "DisplayServicesGetBrightness");
++	    setfn = (DSSetBrightnessFn) dlsym(h, "DisplayServicesSetBrightness");
++	}
++	tried = 1;
++    }
++    if (getp) *getp = getfn;
++    if (setp) *setp = setfn;
++    return (getfn != NULL && setfn != NULL);
++}
++
++/*
++ *----------------------------------------------------------------------
++ * sysctl string helper.
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgSysctlStr(const char *name, char *buf, size_t buflen)
++{
++    size_t len = buflen;
++
++    buf[0] = '\0';
++    if (sysctlbyname(name, buf, &len, NULL, 0) == 0) {
++	if (len < buflen) {
++	    buf[len] = '\0';
++	}
++	return 1;
++    }
++    return 0;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * sharedpreferences: a typed key/value store backed by one Tcl-dict file
++ * per "file" name under ~/Library/Application Support/undroidwish/prefs/.
++ * Each value is stored as a 2-element list {type value}.
++ *----------------------------------------------------------------------
++ */
++
++static void
++BorgPrefsPath(const char *file, char *out, size_t outlen)
++{
++    const char *home = getenv("HOME");
++
++    if (home == NULL) home = "/tmp";
++    snprintf(out, outlen,
++	     "%s/Library/Application Support/undroidwish/prefs/%s.tcldict",
++	     home, file);
++}
++
++static void
++BorgPrefsMkdir(const char *home)
++{
++    char p[2048];
++
++    snprintf(p, sizeof(p), "%s/Library/Application Support", home);
++    mkdir(p, 0755);
++    snprintf(p, sizeof(p), "%s/Library/Application Support/undroidwish", home);
++    mkdir(p, 0755);
++    snprintf(p, sizeof(p),
++	     "%s/Library/Application Support/undroidwish/prefs", home);
++    mkdir(p, 0755);
++}
++
++/*
++ * Returns a dict Tcl_Obj with refCount 0; the caller takes ownership
++ * (Tcl_IncrRefCount before mutating, Tcl_DecrRefCount when done).  A missing
++ * or malformed file yields a fresh empty dict.
++ */
++static Tcl_Obj *
++BorgPrefsLoad(const char *file)
++{
++    char path[2048];
++    Tcl_Obj *dict = NULL;
++    Tcl_Channel chan;
++
++    BorgPrefsPath(file, path, sizeof(path));
++    chan = Tcl_OpenFileChannel(NULL, path, "r", 0);
++    if (chan != NULL) {
++	Tcl_Obj *data = Tcl_NewObj();
++	Tcl_IncrRefCount(data);
++	Tcl_SetChannelOption(NULL, chan, "-translation", "binary");
++	if (Tcl_ReadChars(chan, data, -1, 0) >= 0) {
++	    int size;
++	    if (Tcl_DictObjSize(NULL, data, &size) == TCL_OK) {
++		/* Private refCount-0 copy for the caller to own and mutate. */
++		dict = Tcl_DuplicateObj(data);
++	    }
++	}
++	Tcl_DecrRefCount(data);
++	Tcl_Close(NULL, chan);
++    }
++    if (dict == NULL) {
++	dict = Tcl_NewDictObj();
++    }
++    return dict;
++}
++
++static int
++BorgPrefsSave(const char *file, Tcl_Obj *dict)
++{
++    char path[2048];
++    const char *home = getenv("HOME");
++    Tcl_Channel chan;
++    const char *str;
++    int len, ok = 0;
++
++    if (home == NULL) home = "/tmp";
++    BorgPrefsMkdir(home);
++    BorgPrefsPath(file, path, sizeof(path));
++    chan = Tcl_OpenFileChannel(NULL, path, "w", 0644);
++    if (chan != NULL) {
++	Tcl_SetChannelOption(NULL, chan, "-translation", "binary");
++	str = Tcl_GetStringFromObj(dict, &len);
++	if (Tcl_WriteChars(chan, str, len) >= 0) {
++	    ok = 1;
++	}
++	Tcl_Close(NULL, chan);
++    }
++    return ok;
++}
++
++/*
++ * Subcommand handlers for sharedpreferences.  Returns a Tcl status.
++ *   borg sharedpreferences FILE OP ?KEY VALUE?
++ */
++static int
++BorgSharedPrefs(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
++{
++    static const char *const shpCmds[] = {
++	"getboolean", "getfloat", "getint", "getlong", "getstring",
++	"setboolean", "setfloat", "setint", "setlong", "setstring",
++	"remove", "clear", "all", "alltypes", "keys", NULL
++    };
++    enum shpCmd {
++	SHP_getbool, SHP_getfloat, SHP_getint, SHP_getlong, SHP_getstring,
++	SHP_setbool, SHP_setfloat, SHP_setint, SHP_setlong, SHP_setstring,
++	SHP_remove, SHP_clear, SHP_all, SHP_alltypes, SHP_keys
++    };
++    int cmd;
++    const char *file;
++    Tcl_Obj *dict, *key = NULL, *stored = NULL;
++
++    if ((objc < 4) || (objc > 6)) {
++	Tcl_WrongNumArgs(interp, 2, objv, "file op ?key value?");
++	return TCL_ERROR;
++    }
++    if (Tcl_GetIndexFromObj(interp, objv[3], shpCmds, "option", 0,
++			    &cmd) != TCL_OK) {
++	return TCL_ERROR;
++    }
++    file = Tcl_GetString(objv[2]);
++    if (objc > 4) {
++	key = objv[4];
++    }
++    dict = BorgPrefsLoad(file);
++    Tcl_IncrRefCount(dict);
++
++    if (key != NULL) {
++	Tcl_DictObjGet(NULL, dict, key, &stored);
++    }
++
++    switch ((enum shpCmd) cmd) {
++    case SHP_getbool: case SHP_getfloat: case SHP_getint:
++    case SHP_getlong: case SHP_getstring: {
++	/* objv[5] is the default if missing. */
++	Tcl_Obj *val = NULL;
++	if (objc != 6) {
++	    Tcl_DecrRefCount(dict);
++	    Tcl_WrongNumArgs(interp, 2, objv, "file getX key default");
++	    return TCL_ERROR;
++	}
++	if (stored != NULL) {
++	    /* stored = {type value}; take value (last element). */
++	    int n;
++	    Tcl_Obj **el;
++	    if (Tcl_ListObjGetElements(NULL, stored, &n, &el) == TCL_OK &&
++		n == 2) {
++		val = el[1];
++	    } else {
++		val = stored;
++	    }
++	}
++	if (val == NULL) {
++	    val = objv[5];
++	}
++	Tcl_SetObjResult(interp, val);
++	break;
++    }
++    case SHP_setbool: case SHP_setfloat: case SHP_setint:
++    case SHP_setlong: case SHP_setstring: {
++	const char *type;
++	Tcl_Obj *pair;
++	if (objc != 6) {
++	    Tcl_DecrRefCount(dict);
++	    Tcl_WrongNumArgs(interp, 2, objv, "file setX key value");
++	    return TCL_ERROR;
++	}
++	switch ((enum shpCmd) cmd) {
++	case SHP_setbool:   type = "boolean"; break;
++	case SHP_setfloat:  type = "float";   break;
++	case SHP_setint:    type = "int";     break;
++	case SHP_setlong:   type = "long";    break;
++	default:            type = "string";  break;
++	}
++	pair = Tcl_NewListObj(0, NULL);
++	Tcl_ListObjAppendElement(NULL, pair, Tcl_NewStringObj(type, -1));
++	Tcl_ListObjAppendElement(NULL, pair, objv[5]);
++	Tcl_DictObjPut(NULL, dict, key, pair);
++	BorgPrefsSave(file, dict);
++	Tcl_SetObjResult(interp, objv[5]);
++	break;
++    }
++    case SHP_remove:
++	if (key != NULL) {
++	    Tcl_DictObjRemove(NULL, dict, key);
++	    BorgPrefsSave(file, dict);
++	}
++	break;
++    case SHP_clear: {
++	Tcl_Obj *empty = Tcl_NewDictObj();
++	BorgPrefsSave(file, empty);
++	Tcl_DecrRefCount(empty);
++	break;
++    }
++    case SHP_keys: {
++	Tcl_Obj *list = Tcl_NewListObj(0, NULL);
++	Tcl_DictSearch s;
++	Tcl_Obj *k, *v;
++	int done;
++	if (Tcl_DictObjFirst(NULL, dict, &s, &k, &v, &done) == TCL_OK) {
++	    for (; !done; Tcl_DictObjNext(&s, &k, &v, &done)) {
++		Tcl_ListObjAppendElement(NULL, list, k);
++	    }
++	    Tcl_DictObjDone(&s);
++	}
++	Tcl_SetObjResult(interp, list);
++	break;
++    }
++    case SHP_all: case SHP_alltypes: {
++	Tcl_Obj *out = Tcl_NewListObj(0, NULL);
++	Tcl_DictSearch s;
++	Tcl_Obj *k, *v;
++	int done;
++	if (Tcl_DictObjFirst(NULL, dict, &s, &k, &v, &done) == TCL_OK) {
++	    for (; !done; Tcl_DictObjNext(&s, &k, &v, &done)) {
++		int n;
++		Tcl_Obj **el;
++		Tcl_ListObjAppendElement(NULL, out, k);
++		if (cmd == SHP_alltypes) {
++		    /* {type value} */
++		    Tcl_ListObjAppendElement(NULL, out, v);
++		} else if (Tcl_ListObjGetElements(NULL, v, &n, &el) == TCL_OK
++			   && n == 2) {
++		    Tcl_ListObjAppendElement(NULL, out, el[1]);
++		} else {
++		    Tcl_ListObjAppendElement(NULL, out, v);
++		}
++	    }
++	    Tcl_DictObjDone(&s);
++	}
++	Tcl_SetObjResult(interp, out);
++	break;
++    }
++    }
++    Tcl_DecrRefCount(dict);
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * displaymetrics via CoreGraphics.
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgDisplayMetrics(Tcl_Interp *interp)
++{
++    CGDirectDisplayID d = CGMainDisplayID();
++    size_t wpx = CGDisplayPixelsWide(d);
++    size_t hpx = CGDisplayPixelsHigh(d);
++    CGSize mm = CGDisplayScreenSize(d);	/* millimetres */
++    double xdpi = 96.0, ydpi = 96.0, density, sdensity;
++    int ddpi;
++    char buf[256];
++
++    if (mm.width > 0.0) {
++	xdpi = (double) wpx / (mm.width / 25.4);
++    }
++    if (mm.height > 0.0) {
++	ydpi = (double) hpx / (mm.height / 25.4);
++    }
++    /* Android density baseline is 160dpi. */
++    density = ((xdpi + ydpi) / 2.0) / 160.0;
++    ddpi = (int)(density * 160.0 + 0.5);
++    sdensity = density;
++    snprintf(buf, sizeof(buf),
++	     "density %.3g densitydpi %d width %lu height %lu "
++	     "xdpi %.4g ydpi %.4g scaleddensity %.3g rotation 0",
++	     density, ddpi, (unsigned long) wpx, (unsigned long) hpx,
++	     xdpi, ydpi, sdensity);
++    Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * osbuildinfo: flat {key value ...} list shaped like Android's, filled
++ * from sysctl / environment.
++ *----------------------------------------------------------------------
++ */
++
++static void
++BorgAddKV(Tcl_Obj *list, const char *k, const char *v)
++{
++    Tcl_ListObjAppendElement(NULL, list, Tcl_NewStringObj(k, -1));
++    Tcl_ListObjAppendElement(NULL, list, Tcl_NewStringObj(v ? v : "", -1));
++}
++
++static int
++BorgOSBuildInfo(Tcl_Interp *interp)
++{
++    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
++    char osver[128], darwin[128], model[128], machine[64], cpu[256], host[256];
++
++    BorgSysctlStr("kern.osproductversion", osver, sizeof(osver));
++    BorgSysctlStr("kern.osversion", darwin, sizeof(darwin));
++    BorgSysctlStr("hw.model", model, sizeof(model));
++    BorgSysctlStr("hw.machine", machine, sizeof(machine));
++    BorgSysctlStr("machdep.cpu.brand_string", cpu, sizeof(cpu));
++    if (gethostname(host, sizeof(host)) != 0) host[0] = '\0';
++
++    /*
++     * "os" identifies the platform so callers can distinguish builds without a
++     * separate (non-standard) "borg platform" subcommand: "osx" here, vs
++     * "ios"/"iossimulator"/"maccatalyst" from the iWish borg, vs absent on
++     * Android.  de1app reads `dict get [borg osbuildinfo] os`.
++     */
++    BorgAddKV(list, "os", "osx");
++    BorgAddKV(list, "version.codename", "REL");
++    BorgAddKV(list, "version.incremental", darwin);
++    BorgAddKV(list, "version.release", osver);
++    BorgAddKV(list, "version.sdk", "0");
++    BorgAddKV(list, "board", model);
++    BorgAddKV(list, "bootloader", "");
++    BorgAddKV(list, "brand", "Apple");
++    BorgAddKV(list, "cpu_abi", machine);
++    BorgAddKV(list, "cpu_abi2", "");
++    BorgAddKV(list, "device", model);
++    BorgAddKV(list, "display", darwin);
++    BorgAddKV(list, "fingerprint", "");
++    BorgAddKV(list, "hardware", cpu);
++    BorgAddKV(list, "host", host);
++    BorgAddKV(list, "id", darwin);
++    BorgAddKV(list, "manufacturer", "Apple");
++    BorgAddKV(list, "model", model);
++    BorgAddKV(list, "product", model);
++    BorgAddKV(list, "serial", "");
++    BorgAddKV(list, "tags", "release-keys");
++    BorgAddKV(list, "time", "0");
++    BorgAddKV(list, "type", "user");
++    BorgAddKV(list, "user", getenv("USER") ? getenv("USER") : "");
++    BorgAddKV(list, "radio", "");
++    Tcl_SetObjResult(interp, list);
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * networkinfo: "none" / "wifi" / "ethernet" from getifaddrs.
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgNetworkInfo(Tcl_Interp *interp)
++{
++    struct ifaddrs *ifap = NULL, *ifa;
++    const char *result = "none";
++
++    if (getifaddrs(&ifap) == 0) {
++	for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
++	    if (ifa->ifa_addr == NULL) continue;
++	    if (ifa->ifa_addr->sa_family != AF_INET) continue;
++	    if (!(ifa->ifa_flags & IFF_UP)) continue;
++	    if (!(ifa->ifa_flags & IFF_RUNNING)) continue;
++	    if (ifa->ifa_flags & IFF_LOOPBACK) continue;
++	    /*
++	     * Heuristic: en* interfaces are Wi-Fi or wired Ethernet; we can't
++	     * distinguish without SystemConfiguration, so report the common
++	     * "wifi" for en* and "ethernet" for anything else with a route.
++	     */
++	    if (strncmp(ifa->ifa_name, "en", 2) == 0) {
++		result = "wifi";
++		break;
++	    }
++	    result = "ethernet";
++	}
++	freeifaddrs(ifap);
++    }
++    Tcl_SetObjResult(interp, Tcl_NewStringObj(result, -1));
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * usbdevices via IOKit.
++ *----------------------------------------------------------------------
++ */
++
++static void
++BorgIOKitInt(io_service_t dev, CFStringRef key, Tcl_Obj *dict,
++	     const char *outkey)
++{
++    CFTypeRef ref = IORegistryEntryCreateCFProperty(dev, key,
++						    kCFAllocatorDefault, 0);
++    if (ref != NULL) {
++	if (CFGetTypeID(ref) == CFNumberGetTypeID()) {
++	    long long v = 0;
++	    CFNumberGetValue((CFNumberRef) ref, kCFNumberLongLongType, &v);
++	    Tcl_DictObjPut(NULL, dict, Tcl_NewStringObj(outkey, -1),
++			   Tcl_NewWideIntObj((Tcl_WideInt) v));
++	}
++	CFRelease(ref);
++    }
++}
++
++static void
++BorgIOKitStr(io_service_t dev, CFStringRef key, Tcl_Obj *dict,
++	     const char *outkey)
++{
++    CFTypeRef ref = IORegistryEntryCreateCFProperty(dev, key,
++						    kCFAllocatorDefault, 0);
++    if (ref != NULL) {
++	if (CFGetTypeID(ref) == CFStringGetTypeID()) {
++	    char buf[512];
++	    if (CFStringGetCString((CFStringRef) ref, buf, sizeof(buf),
++				   kCFStringEncodingUTF8)) {
++		Tcl_DictObjPut(NULL, dict, Tcl_NewStringObj(outkey, -1),
++			       Tcl_NewStringObj(buf, -1));
++	    }
++	}
++	CFRelease(ref);
++    }
++}
++
++static int
++BorgUsbDevices(Tcl_Interp *interp)
++{
++    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
++    CFMutableDictionaryRef match = IOServiceMatching("IOUSBDevice");
++    io_iterator_t it = 0;
++    /* 0 == kIOMainPortDefault (macOS 12+) == kIOMasterPortDefault (older). */
++    const mach_port_t mainPort = 0;
++
++    if (match == NULL) {
++	/* Older/newer class name fallback. */
++	match = IOServiceMatching("IOUSBHostDevice");
++    }
++    if (match != NULL &&
++	IOServiceGetMatchingServices(mainPort, match, &it)
++	== KERN_SUCCESS) {
++	io_service_t dev;
++	while ((dev = IOIteratorNext(it)) != 0) {
++	    Tcl_Obj *d = Tcl_NewDictObj();
++	    BorgIOKitInt(dev, CFSTR("idVendor"), d, "vendor");
++	    BorgIOKitInt(dev, CFSTR("idProduct"), d, "product");
++	    BorgIOKitStr(dev, CFSTR("USB Vendor Name"), d, "manufacturer");
++	    BorgIOKitStr(dev, CFSTR("USB Product Name"), d, "name");
++	    BorgIOKitStr(dev, CFSTR("USB Serial Number"), d, "serial");
++	    Tcl_ListObjAppendElement(NULL, list, d);
++	    IOObjectRelease(dev);
++	}
++	IOObjectRelease(it);
++    }
++    Tcl_SetObjResult(interp, list);
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * An empty cursor object, so "borg content query" can return a usable
++ * (zero-row) cursor and callers never error on the cursor protocol.
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgCursorObjCmd(ClientData cd, Tcl_Interp *interp, int objc,
++		 Tcl_Obj *const objv[])
++{
++    static const char *const cursorCmds[] = {
++	"close", "columnnames", "count", "getblob", "getdouble",
++	"getint", "getpos", "getrow", "getstring", "gettype", "isnull",
++	"move", "moveto", NULL
++    };
++    enum cur {
++	CUR_close, CUR_columnnames, CUR_count, CUR_getblob, CUR_getdouble,
++	CUR_getint, CUR_getpos, CUR_getrow, CUR_getstring, CUR_gettype,
++	CUR_isnull, CUR_move, CUR_moveto
++    };
++    int cmd;
++
++    if (objc < 2) {
++	Tcl_WrongNumArgs(interp, 1, objv, "option ?arg ...?");
++	return TCL_ERROR;
++    }
++    if (Tcl_GetIndexFromObj(interp, objv[1], cursorCmds, "option", 0,
++			    &cmd) != TCL_OK) {
++	return TCL_ERROR;
++    }
++    switch ((enum cur) cmd) {
++    case CUR_close:
++	Tcl_DeleteCommand(interp, Tcl_GetString(objv[0]));
++	break;
++    case CUR_columnnames: case CUR_getrow:
++	Tcl_SetObjResult(interp, Tcl_NewListObj(0, NULL));
++	break;
++    case CUR_count: case CUR_getint: case CUR_getpos:
++	Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
++	break;
++    case CUR_getdouble:
++	Tcl_SetObjResult(interp, Tcl_NewDoubleObj(0.0));
++	break;
++    case CUR_isnull:
++	Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
++	break;
++    case CUR_move: case CUR_moveto:
++	Tcl_SetObjResult(interp, Tcl_NewIntObj(0));	/* no movement */
++	break;
++    case CUR_getblob: case CUR_getstring: case CUR_gettype:
++	Tcl_SetObjResult(interp, Tcl_NewStringObj("", -1));
++	break;
++    }
++    return TCL_OK;
++}
++
++static int
++BorgEmptyCursor(Tcl_Interp *interp)
++{
++    static int seq = 0;
++    char name[64];
++
++    snprintf(name, sizeof(name), "::borg::cursor%d", ++seq);
++    Tcl_CreateObjCommand(interp, name, BorgCursorObjCmd, NULL, NULL);
++    Tcl_SetObjResult(interp, Tcl_NewStringObj(name, -1));
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * onintent callback storage.
++ *----------------------------------------------------------------------
++ */
++
++static Tcl_Obj *borgOnIntent = NULL;
++
++/*
++ *----------------------------------------------------------------------
++ * The main "borg" dispatcher.
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgObjCmd(ClientData clientData, Tcl_Interp *interp, int objc,
++	   Tcl_Obj *const objv[])
++{
++    static const char *const borgCmds[] = {
++	"activity", "alarm", "beep", "bluetooth",
++	"brightness", "broadcast", "camera", "cancel",
++	"checkpermission",
++	"content", "displaymetrics", "endspeak", "isspeaking",
++	"keyboardinfo", "locale", "location", "log",
++	"ndefformat", "ndefread", "ndefwrite", "networkinfo",
++	"notification", "onintent", "osbuildinfo",
++	"osenvironment", "packageinfo", "phoneinfo", "providerinfo",
++	"queryactivities", "querybroadcastreceivers",
++	"queryconsts", "queryfeatures", "queryfields",
++	"queryservices",
++	"screenorientation", "sendsms", "sensor",
++	"sharedpreferences", "shortcut",
++	"speak", "speechrecognition", "spinner", "stopspeak",
++	"systemproperties", "systemui", "tetherinfo", "toast",
++	"trace", "usbdevices", "usbpermission", "vibrate",
++	"withdraw", NULL
++    };
++    enum borgCmd {
++	BORG_activity, BORG_alarm, BORG_beep, BORG_bluetooth,
++	BORG_brightness, BORG_broadcast, BORG_camera, BORG_cancel,
++	BORG_checkpermission,
++	BORG_content, BORG_displaymetrics, BORG_endspeak, BORG_isspeaking,
++	BORG_keyboardinfo, BORG_locale, BORG_location, BORG_log,
++	BORG_ndefformat, BORG_ndefread, BORG_ndefwrite, BORG_networkinfo,
++	BORG_notification, BORG_onintent, BORG_osbuildinfo,
++	BORG_osenvironment, BORG_packageinfo, BORG_phoneinfo, BORG_providerinfo,
++	BORG_queryactivities, BORG_querybroadcastreceivers,
++	BORG_queryconsts, BORG_queryfeatures, BORG_queryfields,
++	BORG_queryservices,
++	BORG_screenorientation, BORG_sendsms, BORG_sensor,
++	BORG_sharedpreferences, BORG_shortcut,
++	BORG_speak, BORG_speechrecognition, BORG_spinner, BORG_stopspeak,
++	BORG_systemproperties, BORG_systemui, BORG_tetherinfo, BORG_toast,
++	BORG_trace, BORG_usbdevices, BORG_usbpermission, BORG_vibrate,
++	BORG_withdraw
++    };
++    int command;
++
++    if (objc < 2) {
++	Tcl_WrongNumArgs(interp, 1, objv, "option ?arg ...?");
++	return TCL_ERROR;
++    }
++    if (Tcl_GetIndexFromObj(interp, objv[1], borgCmds, "option", 0,
++			    &command) != TCL_OK) {
++	return TCL_ERROR;
++    }
++
++    switch ((enum borgCmd) command) {
++
++    /* ---- Native implementations ------------------------------------ */
++
++    case BORG_log: {				/* borg log prio tag message */
++	if (objc != 5) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "prio tag message");
++	    return TCL_ERROR;
++	}
++	fprintf(stderr, "%s/%s: %s\n", Tcl_GetString(objv[2]),
++		Tcl_GetString(objv[3]), Tcl_GetString(objv[4]));
++	fflush(stderr);
++	return TCL_OK;
++    }
++
++    case BORG_trace: {				/* borg trace message script */
++	if (objc != 4) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "message script");
++	    return TCL_ERROR;
++	}
++	return Tcl_EvalObjEx(interp, objv[3], 0);
++    }
++
++    case BORG_beep: {				/* borg beep ?uri? */
++	if (objc > 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "?uri?");
++	    return TCL_ERROR;
++	}
++	if (objc == 3) {
++	    const char *argv[3];
++	    argv[0] = "afplay";
++	    argv[1] = Tcl_GetString(objv[2]);
++	    argv[2] = NULL;
++	    (void) BorgSpawn(argv);
++	} else {
++	    const char *argv[4];
++	    argv[0] = "osascript";
++	    argv[1] = "-e";
++	    argv[2] = "beep";
++	    argv[3] = NULL;
++	    (void) BorgSpawn(argv);
++	}
++	return TCL_OK;
++    }
++
++    case BORG_vibrate: {			/* borg vibrate duration */
++	int dur;
++	if (objc != 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "duration");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIntFromObj(interp, objv[2], &dur) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	/* No vibration hardware on the Mac -- accepted no-op. */
++	return TCL_OK;
++    }
++
++    case BORG_toast: {				/* borg toast text ?longdur? */
++	int dur = 0;
++	if ((objc < 3) || (objc > 4)) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "text ?longdur?");
++	    return TCL_ERROR;
++	}
++	if ((objc > 3) &&
++	    (Tcl_GetBooleanFromObj(interp, objv[3], &dur) != TCL_OK)) {
++	    return TCL_ERROR;
++	}
++	BorgEnsureTkHelpers(interp);
++	{
++	    Tcl_Obj *cmd = Tcl_NewListObj(0, NULL);
++	    Tcl_ListObjAppendElement(NULL, cmd,
++		Tcl_NewStringObj("::borg::ui::toast", -1));
++	    Tcl_ListObjAppendElement(NULL, cmd, objv[2]);
++	    Tcl_ListObjAppendElement(NULL, cmd, Tcl_NewIntObj(dur));
++	    Tcl_IncrRefCount(cmd);
++	    (void) Tcl_EvalObjEx(interp, cmd, TCL_EVAL_DIRECT);
++	    Tcl_DecrRefCount(cmd);
++	    Tcl_ResetResult(interp);
++	}
++	return TCL_OK;
++    }
++
++    case BORG_spinner: {			/* borg spinner bool */
++	int on;
++	if (objc != 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "bool");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetBooleanFromObj(interp, objv[2], &on) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	BorgEnsureTkHelpers(interp);
++	{
++	    char buf[64];
++	    snprintf(buf, sizeof(buf), "::borg::ui::spinner %d", on);
++	    BorgEvalIgnore(interp, buf);
++	}
++	return TCL_OK;
++    }
++
++    case BORG_speak: {			/* borg speak text ?lang pitch rate? */
++	if ((objc < 3) || (objc > 6)) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "text ?lang pitch rate?");
++	    return TCL_ERROR;
++	}
++	return BorgSpeak(interp, Tcl_GetString(objv[2]),
++			 (objc > 5) ? Tcl_GetString(objv[5]) : NULL);
++    }
++
++    case BORG_stopspeak:
++    case BORG_endspeak: {
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	if (borgSayPid > 0 && kill(borgSayPid, 0) == 0) {
++	    kill(borgSayPid, SIGTERM);
++	}
++	borgSayPid = 0;
++	return TCL_OK;
++    }
++
++    case BORG_isspeaking: {
++	int speaking;
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	speaking = (borgSayPid > 0 && kill(borgSayPid, 0) == 0) ? 1 : 0;
++	Tcl_SetObjResult(interp, Tcl_NewIntObj(speaking));
++	return TCL_OK;
++    }
++
++    case BORG_activity: {		/* borg activity action uri type ... */
++	/* Map the common VIEW intent to `open <uri>`. */
++	if ((objc < 5) || (objc > 9)) {
++	    Tcl_WrongNumArgs(interp, 2, objv,
++			     "action uri type ?cats comp args callback?");
++	    return TCL_ERROR;
++	}
++	{
++	    const char *action = Tcl_GetString(objv[2]);
++	    const char *uri = Tcl_GetString(objv[3]);
++	    if (strstr(action, "VIEW") != NULL && uri[0] != '\0') {
++		const char *argv[3];
++		argv[0] = "open";
++		argv[1] = uri;
++		argv[2] = NULL;
++		(void) BorgSpawn(argv);
++	    }
++	    /* other intents: accepted no-op */
++	}
++	return TCL_OK;
++    }
++
++    case BORG_brightness: {			/* borg brightness ?pct? */
++	DSGetBrightnessFn getfn;
++	DSSetBrightnessFn setfn;
++	if (objc > 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "?percentage?");
++	    return TCL_ERROR;
++	}
++	if (!BorgBrightnessFns(&getfn, &setfn)) {
++	    /* No DisplayServices: report 100, accept sets as no-op. */
++	    if (objc == 2) {
++		Tcl_SetObjResult(interp, Tcl_NewIntObj(100));
++	    }
++	    return TCL_OK;
++	}
++	if (objc == 2) {
++	    float b = 1.0f;
++	    getfn(CGMainDisplayID(), &b);
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj((int)(b * 100.0f + 0.5f)));
++	} else {
++	    int pct;
++	    if (Tcl_GetIntFromObj(interp, objv[2], &pct) != TCL_OK) {
++		return TCL_ERROR;
++	    }
++	    if (pct < 0) pct = 0;
++	    if (pct > 100) pct = 100;
++	    setfn(CGMainDisplayID(), (float) pct / 100.0f);
++	}
++	return TCL_OK;
++    }
++
++    case BORG_displaymetrics:
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	return BorgDisplayMetrics(interp);
++
++    case BORG_osbuildinfo:
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	return BorgOSBuildInfo(interp);
++
++    case BORG_networkinfo:
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	return BorgNetworkInfo(interp);
++
++    case BORG_keyboardinfo:
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	/* Desktop: a hardware keyboard is always present and shown. */
++	Tcl_SetObjResult(interp,
++	    Tcl_NewStringObj("keyboard qwerty hidden 0 hardhidden 0", -1));
++	return TCL_OK;
++
++    case BORG_osenvironment: {		/* borg osenvironment op */
++	static const char *const osenvCmds[] = {
++	    "datadir", "downloadcachedir", "externalstoragedir",
++	    "externalstoragepublicdir", "externalstoragestate",
++	    "isexternalstorageemulated", "isexternalstorageremovable",
++	    "rootdir", NULL
++	};
++	enum oe { OE_data, OE_dlcache, OE_ext, OE_extpub, OE_extstate,
++		  OE_emul, OE_remov, OE_root };
++	int sub;
++	const char *home = getenv("HOME");
++	char buf[2048];
++	if (objc < 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "op ?arg?");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], osenvCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	if (home == NULL) home = "/tmp";
++	switch ((enum oe) sub) {
++	case OE_data:
++	    snprintf(buf, sizeof(buf),
++		"%s/Library/Application Support/undroidwish", home);
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
++	    break;
++	case OE_dlcache:
++	    snprintf(buf, sizeof(buf), "%s/Library/Caches", home);
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
++	    break;
++	case OE_ext:
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj(home, -1));
++	    break;
++	case OE_extpub:
++	    snprintf(buf, sizeof(buf), "%s/Documents", home);
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
++	    break;
++	case OE_extstate:
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj("mounted", -1));
++	    break;
++	case OE_emul: case OE_remov:
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
++	    break;
++	case OE_root:
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj("/", -1));
++	    break;
++	}
++	return TCL_OK;
++    }
++
++    case BORG_systemproperties: {		/* borg systemproperties ?name? */
++	if (objc > 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "?name?");
++	    return TCL_ERROR;
++	}
++	if (objc == 3) {
++	    char buf[1024];
++	    if (BorgSysctlStr(Tcl_GetString(objv[2]), buf, sizeof(buf))) {
++		Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
++	    }
++	    /* unknown property -> empty (Android behaviour) */
++	} else {
++	    /* No name: a small representative set. */
++	    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
++	    char buf[1024];
++	    const char *names[] = {
++		"kern.ostype", "kern.osrelease", "kern.osproductversion",
++		"hw.model", "hw.machine", "machdep.cpu.brand_string", NULL
++	    };
++	    int i;
++	    for (i = 0; names[i] != NULL; i++) {
++		if (BorgSysctlStr(names[i], buf, sizeof(buf))) {
++		    BorgAddKV(list, names[i], buf);
++		}
++	    }
++	    Tcl_SetObjResult(interp, list);
++	}
++	return TCL_OK;
++    }
++
++    case BORG_locale: {			/* borg locale ?set|lang|tts ?lang?? */
++	if (objc == 2) {
++	    const char *loc = setlocale(LC_ALL, NULL);
++	    if (loc == NULL || loc[0] == '\0' || strcmp(loc, "C") == 0) {
++		loc = getenv("LANG");
++	    }
++	    Tcl_SetObjResult(interp,
++		Tcl_NewStringObj(loc ? loc : "en_US", -1));
++	} else {
++	    const char *op = Tcl_GetString(objv[2]);
++	    if (strcmp(op, "set") == 0 && objc == 4) {
++		setlocale(LC_ALL, Tcl_GetString(objv[3]));
++		Tcl_SetObjResult(interp, objv[3]);
++	    } else if (strcmp(op, "tts") == 0) {
++		Tcl_SetObjResult(interp,
++		    (objc == 4) ? objv[3]
++				: Tcl_NewStringObj("en_US", -1));
++	    } else {
++		/* "lang" or anything else: echo it back */
++		Tcl_SetObjResult(interp, objv[objc - 1]);
++	    }
++	}
++	return TCL_OK;
++    }
++
++    case BORG_notification: {		/* borg notification add|delete|led */
++	static const char *const nCmds[] = {"add", "delete", "led", NULL};
++	enum n { N_add, N_delete, N_led };
++	int sub;
++	if (objc < 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "add|delete|led ...");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], nCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	switch ((enum n) sub) {
++	case N_add:		/* add id title ?text icon ...? */
++	    if (objc >= 5) {
++		BorgNotify(interp, Tcl_GetString(objv[4]),
++			   (objc > 5) ? Tcl_GetString(objv[5])
++				      : Tcl_GetString(objv[4]));
++	    } else if (objc == 4) {
++		BorgNotify(interp, Tcl_GetString(objv[3]), "");
++	    }
++	    break;
++	case N_delete: case N_led:
++	    /* macOS Notification Center has no per-id removal API here. */
++	    break;
++	}
++	return TCL_OK;
++    }
++
++    case BORG_usbdevices:		/* borg usbdevices ?extended? */
++	return BorgUsbDevices(interp);
++
++    case BORG_usbpermission:		/* borg usbpermission device ?ask? */
++	/* No USB permission gate on macOS. */
++	Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
++	return TCL_OK;
++
++    case BORG_checkpermission: {	/* borg checkpermission ?perms... ask? */
++	if (objc < 3) {
++	    /* query the permission list -> none enumerated */
++	    Tcl_SetObjResult(interp, Tcl_NewListObj(0, NULL));
++	} else if (objc == 3) {
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj(1));	/* granted */
++	} else {
++	    /* last arg is the ask flag; report each requested perm granted */
++	    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
++	    int i;
++	    for (i = 2; i < objc - 1; i++) {
++		Tcl_ListObjAppendElement(NULL, list, Tcl_NewIntObj(1));
++	    }
++	    Tcl_SetObjResult(interp, list);
++	}
++	return TCL_OK;
++    }
++
++    case BORG_bluetooth: {		/* borg bluetooth state|on|off|... */
++	static const char *const btCmds[] = {
++	    "devices", "myaddress", "remoteaddress", "off", "on",
++	    "scanmode", "state", "start_discovery", "cancel_discovery", NULL
++	};
++	enum bt { BT_devices, BT_myaddress, BT_remoteaddress, BT_off, BT_on,
++		  BT_scanmode, BT_state, BT_startdisc, BT_canceldisc };
++	int sub;
++	if ((objc < 3) || (objc > 4)) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "devices|state|... ?arg?");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], btCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	switch ((enum bt) sub) {
++	case BT_state: {
++	    /* Best effort: parse system_profiler for the controller state. */
++	    const char *argv[2] = {"system_profiler", "SPBluetoothDataType"};
++	    Tcl_Obj *out = BorgCapture(interp, 2, argv);
++	    const char *s = "off";
++	    if (out != NULL) {
++		const char *txt = Tcl_GetString(out);
++		if (strstr(txt, "State: On") || strstr(txt, "Powered: On") ||
++		    strstr(txt, "\"on\"")) {
++		    s = "on";
++		}
++		Tcl_DecrRefCount(out);
++	    }
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj(s, -1));
++	    break;
++	}
++	case BT_on: case BT_off: {
++	    /* Try blueutil if installed; otherwise accepted no-op. */
++	    const char *argv[3];
++	    argv[0] = "blueutil";
++	    argv[1] = (sub == BT_on) ? "--power=1" : "--power=0";
++	    argv[2] = NULL;
++	    (void) BorgSpawn(argv);
++	    break;
++	}
++	case BT_scanmode:
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj("none", -1));
++	    break;
++	case BT_myaddress:
++	case BT_remoteaddress:
++	case BT_devices:
++	    /* Enumeration not implemented here -> empty. */
++	    Tcl_SetObjResult(interp, Tcl_NewListObj(0, NULL));
++	    break;
++	case BT_startdisc: case BT_canceldisc:
++	    break;
++	}
++	return TCL_OK;
++    }
++
++    case BORG_sharedpreferences:
++	return BorgSharedPrefs(interp, objc, objv);
++
++    case BORG_withdraw:
++	if (objc != 2) {
++	    Tcl_WrongNumArgs(interp, 2, objv, NULL);
++	    return TCL_ERROR;
++	}
++	BorgEvalIgnore(interp, "catch {wm withdraw .}");
++	return TCL_OK;
++
++    case BORG_content: {		/* borg content query|insert|update|delete */
++	static const char *const cCmds[] = {
++	    "delete", "insert", "query", "update", NULL
++	};
++	enum c { C_delete, C_insert, C_query, C_update };
++	int sub;
++	if (objc < 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "op ...");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], cCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	if ((enum c) sub == C_query) {
++	    return BorgEmptyCursor(interp);
++	}
++	/* insert/update/delete: 0 rows affected. */
++	Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
++	return TCL_OK;
++    }
++
++    case BORG_onintent: {		/* borg onintent ?command? */
++	if (objc > 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "?command?");
++	    return TCL_ERROR;
++	}
++	if (objc == 3) {
++	    if (borgOnIntent != NULL) Tcl_DecrRefCount(borgOnIntent);
++	    borgOnIntent = objv[2];
++	    Tcl_IncrRefCount(borgOnIntent);
++	} else if (borgOnIntent != NULL) {
++	    Tcl_SetObjResult(interp, borgOnIntent);
++	}
++	return TCL_OK;
++    }
++
++    /* ---- Accepted no-ops / "empty" stubs (no macOS analogue) -------- */
++
++    case BORG_screenorientation:	/* desktop has no rotation */
++	if (objc == 2) {
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj("landscape", -1));
++	}
++	return TCL_OK;
++
++    case BORG_systemui:			/* immersive UI flags: report 0 */
++	if (objc == 2) {
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
++	}
++	return TCL_OK;
++
++    case BORG_tetherinfo:
++	Tcl_SetObjResult(interp,
++	    Tcl_NewStringObj("active {} available {} error {}", -1));
++	return TCL_OK;
++
++    case BORG_phoneinfo:
++    case BORG_providerinfo:
++    case BORG_packageinfo:
++    case BORG_queryconsts:
++    case BORG_queryfields:
++    case BORG_queryfeatures:
++    case BORG_queryactivities:
++    case BORG_queryservices:
++    case BORG_querybroadcastreceivers:
++	/* Nothing to enumerate on the desktop. */
++	Tcl_SetObjResult(interp, Tcl_NewListObj(0, NULL));
++	return TCL_OK;
++
++    case BORG_sendsms:			/* no telephony */
++    case BORG_cancel:			/* no pending activities */
++    case BORG_ndefread:			/* no NFC */
++    case BORG_ndefwrite:
++    case BORG_ndefformat:
++	return TCL_OK;
++
++    case BORG_shortcut:			/* desktop launcher creation: no-op */
++    case BORG_alarm:			/* per-app alarms: no-op */
++	return TCL_OK;
++
++    case BORG_sensor: {			/* borg sensor list|enable|... */
++	static const char *const sCmds[] = {
++	    "disable", "enable", "get", "list", "state", NULL
++	};
++	enum s { S_disable, S_enable, S_get, S_list, S_state };
++	int sub;
++	if ((objc < 3) || (objc > 4)) {
++	    Tcl_WrongNumArgs(interp, 2, objv,
++			     "list|enable|disable|state|get ?index?");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], sCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	switch ((enum s) sub) {
++	case S_list: case S_get:
++	    Tcl_SetObjResult(interp, Tcl_NewListObj(0, NULL));
++	    break;
++	case S_state:
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
++	    break;
++	case S_enable: case S_disable:
++	    break;		/* no Android-style indexed sensors */
++	}
++	return TCL_OK;
++    }
++
++    case BORG_speechrecognition: {	/* borg speechrecognition ... */
++	/* No on-device dictation bridge here; accepted no-op. */
++	return TCL_OK;
++    }
++
++    case BORG_broadcast: {		/* borg broadcast list|register|... */
++	static const char *const bCmds[] = {
++	    "list", "register", "send", "unregister", NULL
++	};
++	int sub;
++	if (objc < 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "list|register|... ...");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], bCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	if (sub == 0) {			/* list */
++	    Tcl_SetObjResult(interp, Tcl_NewListObj(0, NULL));
++	}
++	return TCL_OK;
++    }
++
++    case BORG_camera: {			/* borg camera ... */
++	static const char *const camCmds[] = {
++	    "close", "current", "grayimage", "greyimage", "image", "info",
++	    "jpeg", "mirror", "numcameras", "open", "orientation",
++	    "parameters", "start", "state", "stop", "takejpeg", NULL
++	};
++	enum cm { CM_close, CM_current, CM_gray, CM_grey, CM_image, CM_info,
++		  CM_jpeg, CM_mirror, CM_num, CM_open, CM_orient, CM_params,
++		  CM_start, CM_state, CM_stop, CM_takejpeg };
++	int sub;
++	if (objc < 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "close|open|... ...");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], camCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	/*
++	 * AVFoundation capture is not bridged here yet; report "no cameras"
++	 * so callers degrade gracefully rather than error.
++	 */
++	switch ((enum cm) sub) {
++	case CM_num:
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
++	    break;
++	case CM_current:
++	    Tcl_SetObjResult(interp, Tcl_NewIntObj(-1));
++	    break;
++	case CM_state:
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj("closed", -1));
++	    break;
++	case CM_mirror:
++	    Tcl_SetObjResult(interp, Tcl_NewStringObj("0 0", -1));
++	    break;
++	default:
++	    break;
++	}
++	return TCL_OK;
++    }
++
++    case BORG_location: {		/* borg location get|start|stop|... */
++	static const char *const lCmds[] = {
++	    "get", "gps", "nmea", "satellites", "start", "stop", NULL
++	};
++	int sub;
++	if (objc < 3) {
++	    Tcl_WrongNumArgs(interp, 2, objv, "get|start|stop|... ...");
++	    return TCL_ERROR;
++	}
++	if (Tcl_GetIndexFromObj(interp, objv[2], lCmds, "option", 0,
++				&sub) != TCL_OK) {
++	    return TCL_ERROR;
++	}
++	/*
++	 * CoreLocation needs a bundled app with usage description and user
++	 * consent; not bridged here.  get/gps/satellites/nmea -> empty,
++	 * start/stop -> accepted no-op.
++	 */
++	return TCL_OK;
++    }
++
++    }	/* switch */
++
++    /* Unreachable: every enum value handled above. */
++    return TCL_OK;
++}
++
++/*
++ *----------------------------------------------------------------------
++ * Borg_Init --
++ *
++ *	Register the "borg" command.  Compatible with the Android Borg_Init
++ *	prototype (tkBorg.h) so tkAppInit.c can call it unchanged.
++ *----------------------------------------------------------------------
++ */
++
++int
++Borg_Init(Tcl_Interp *interp)
++{
++    if (Tcl_InitStubs(interp, "8.5", 0) == NULL) {
++	return TCL_ERROR;
++    }
++    Tcl_CreateObjCommand(interp, "borg", BorgObjCmd, (ClientData) interp, NULL);
++    Tcl_PkgProvide(interp, "Borg", "1.0");
++    return TCL_OK;
++}
++
++#else /* !__APPLE__ */
++
++/*
++ * On non-Apple desktops this translation unit is empty; the platform's own
++ * borg (if any) is provided elsewhere.
++ */
++int
++Borg_Init(Tcl_Interp *interp)
++{
++    return TCL_OK;
++}
++
++#endif /* __APPLE__ */

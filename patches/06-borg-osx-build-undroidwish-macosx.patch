@@ -1,0 +1,44 @@
+diff --git a/undroid/build-undroidwish-macosx.sh b/undroid/build-undroidwish-macosx.sh
+index 5b87b803..5c47c1ba
+--- a/undroid/build-undroidwish-macosx.sh
++++ b/undroid/build-undroidwish-macosx.sh
+@@ -1717,6 +1717,31 @@ echo -n "build tcltaglib ... "
+   echo >&3 "done"
+ ) || fail
+ 
++echo -n "build borg (macOS facilities shim) ... "
++(
++  exec 3>&1
++  exec >> build.log 2>&1
++  set -x
++  # Desktop "borg" command: AndroWish's borg is a JNI bridge omitted from
++  # undroidwish ("sans the borg").  tkBorgOSX.c provides a macOS desktop
++  # implementation -- native say/open/IOKit/CoreGraphics where it maps, safe
++  # no-ops otherwise -- built as a loadable Tcl stubs package.
++  test -e ${PFX_HERE}/lib/Borg1.0/libBorg1.0.dylib && echo >&3 "already done" \
++    && exit 0
++  mkdir -p ${PFX_HERE}/lib/Borg1.0
++  ${CC} -dynamiclib -DUSE_TCL_STUBS \
++    -I${PFX_HERE}/include \
++    -o ${PFX_HERE}/lib/Borg1.0/libBorg1.0.dylib \
++    ${AWDIR}/jni/src/tkBorgOSX.c \
++    ${PFX_HERE}/lib/libtclstub8.6.a \
++    -framework CoreFoundation -framework CoreGraphics -framework IOKit \
++    || exit 1
++  cat > ${PFX_HERE}/lib/Borg1.0/pkgIndex.tcl <<'EOD'
++package ifneeded Borg 1.0 [list load [file join $dir libBorg1.0.dylib] Borg]
++EOD
++  echo >&3 "done"
++) || fail
++
+ echo -n "strip binaries ... "
+ (
+   exec 3>&1
+@@ -1743,6 +1768,7 @@ echo -n "wrap single-file Tcl/Tk binary ... "
+   cp -rp ${PFX_HERE}/lib/sdl2tk8* assets
+   cp -rp ${PFX_HERE}/lib/itcl* assets
+   cp -rp ${PFX_HERE}/lib/sqlite3* assets
++  cp -rp ${PFX_HERE}/lib/Borg* assets
+   cp -rp ${PFX_HERE}/lib/tdbc* assets
+   cp -rp ${PFX_HERE}/lib/thread* assets
+   cp -rp ${PFX_HERE}/lib/udp* assets

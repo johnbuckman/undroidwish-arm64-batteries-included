@@ -28,15 +28,14 @@ It builds as a **loadable Tcl stubs package** (`package require Borg`) bundled
 into `assets.zip` — the same mechanism undroidwish already uses for all its
 batteries.
 
-### Deliberately omitted: `borg platform`
+### Platform reported via `osbuildinfo`, not `borg platform`
 
-`platform` is **not** a standard Android `borg` subcommand; it is a de1app/iWish
-extension. This port intentionally does **not** implement it. de1app's
-`ios.tcl` uses *"does `borg platform` succeed?"* as its iWish-detection signal —
-if undroidwish's borg answered `platform`, the desktop build would be misdetected
-as iWish. With `platform` absent, `borg platform` raises a normal "bad option"
-error, which de1app catches (`running_on_ios` → 0, `::iwish` stays unset). This
-is the correct desktop behaviour.
+`platform` is **not** a standard Android `borg` subcommand (it was a de1app/iWish
+extension). Instead of adding it, this port reports the OS as an **`os` key inside
+the standard `osbuildinfo` dict**: `os osx` here, `os ios`/`iossimulator`/
+`maccatalyst` from the iWish iOS borg, and no `os` key on Android. de1app reads
+`dict get [borg osbuildinfo] os` to set `::iwish`/`::ios` and answer
+`running_on_ios`, with no non-standard subcommand and no fragile error-as-signal.
 
 ---
 
@@ -64,7 +63,7 @@ is the correct desktop behaviour.
 | `toast text ?long?` | native ephemeral Toast overlay | a borderless, top-most Tk overlay that auto-dismisses (2 s / 3.5 s) | same UX, Tk implementation |
 | `spinner bool` | shows/hides a busy indicator | sets/clears the `watch` cursor on `.` | same intent |
 | `displaymetrics` | `density densitydpi width height xdpi ydpi scaleddensity rotation` | **same keys**, computed from CoreGraphics pixel size + physical size; `rotation 0` | same format, different source |
-| `osbuildinfo` | flat `{key value …}` of `android.os.Build.*` | **same key set**, filled from `sysctl` (`kern.osproductversion`, `hw.model`, `machdep.cpu.brand_string`, …); `manufacturer Apple` | same shape, macOS values |
+| `osbuildinfo` | flat `{key value …}` of `android.os.Build.*` | **same key set**, filled from `sysctl` (`kern.osproductversion`, `hw.model`, `machdep.cpu.brand_string`, …); `manufacturer Apple`; plus a non-Android **`os osx`** key for platform detection | same shape, macOS values |
 | `systemproperties ?name?` | Android system properties | `sysctlbyname(name)`; no name → a representative set | analogous |
 | `networkinfo` | `none` / `wifi` / `mobile …` / type name | `none` / `wifi` / `ethernet` via `getifaddrs` | same vocabulary (no cellular) |
 | `keyboardinfo` | `keyboard … hidden …` from the device config | `keyboard qwerty hidden 0 hardhidden 0` (desktop always has a keyboard) | simplified |

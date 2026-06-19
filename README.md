@@ -95,11 +95,29 @@ final binary needs `/opt/homebrew/lib` on its rpath — see
 | `patches/00-build-undroidwish-macosx.patch` | toolchain: arm64 min version, clang-21 flag relaxations, autoconf cache seed, real-grep PATH, curl `--without-zstd`, SDL2 `--disable-video-opengles`, jpeg-turbo `--without-simd` |
 | `patches/01-sdl2-configure-arm64-macos.patch` | **the core fix**: arm64 Mac hits the macOS/Cocoa branch, not iOS; relax `declaration-after-statement` |
 | `patches/02-tkimg-libpng-disable-neon.patch` | force `PNG_ARM_NEON_OPT 0` (undefined NEON symbol) |
-| `patches/03-tkimg-libtiff-disable-codecs-*.patch` | disable uncompiled PixarLog/ZIP TIFF codecs |
+| `patches/03-tkimg-libtiff-disable-codecs.patch` | disable uncompiled PixarLog/ZIP TIFF codecs (in the tracked `*.h.in` templates) |
 | `patches/04-sdl2tk-powerinfo-iokit.patch` | `sdltk powerinfo` via IOKit (real battery, 100 on AC/no-battery) |
+| `patches/05-borg-osx-tkBorgOSX.c.patch` | **new file** `jni/src/tkBorgOSX.c` — a desktop `borg` command for macOS (see [`BORG-OSX.md`](BORG-OSX.md)) |
+| `patches/06-borg-osx-build-undroidwish-macosx.patch` | build + bundle the `Borg` package into `assets.zip` |
 
 Apply with `apply-patches.sh`, or individually with `git apply` / `patch -p1`
 from the AndroWish root.
+
+## The desktop `borg` command (macOS)
+
+Stock undroidwish is *"AndroWish sans the borg"* — the Android `borg` command
+(`jni/src/tkBorg.c`, a JNI bridge) is not compiled in, so code written for
+AndroWish that calls `borg …` fails with *invalid command name "borg"*.
+
+Patches 05/06 add **`jni/src/tkBorgOSX.c`**, a self-contained macOS
+implementation built as a loadable Tcl stubs package (`package require Borg`),
+bundled into `assets.zip`. Its subcommand surface matches the documented
+Android command exactly; every documented subcommand exists and **never errors
+on a well-formed call**. Where a macOS facility maps it does the real thing
+(`say`, `open`, IOKit, CoreGraphics, a typed prefs store); where there is no
+analog (NFC, telephony, Android content providers/intents) it is a safe no-op
+returning the Android-shaped empty value. Full per-command status is in
+[`BORG-OSX.md`](BORG-OSX.md).
 
 ## License
 
