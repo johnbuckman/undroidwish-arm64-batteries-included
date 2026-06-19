@@ -34,14 +34,13 @@ This port fills the **existing** Android-shaped `osbuildinfo` keys with real
 Apple values, and callers identify the platform from those:
 
 - **`manufacturer`** = `Apple` → an Apple build (Android reports the device maker).
-- **`product`** = `undroidwish` here, `iWish` from the iWish iOS/Catalyst borg →
-  distinguishes the two Apple builds (both run on Mac hardware under Catalyst).
 - **`model`** = `Mac16,12` here (real `hw.model`); the iWish borg reports the real
-  `iPad..`/`iPhone..` model on iOS and a `Mac..` model on Catalyst → tells iOS
-  hardware from Mac.
+  `iPad..`/`iPhone..` model on iOS → this is the **platform discriminator**.
+- **`product`** = the friendly Apple product name (`MacBook Air` here, via
+  `system_profiler`; `iPad`/`iPhone` on iOS) — informational.
 
-So de1app sets `::iwish` from `product eq "iWish"` and `::ios` from an
-iPad/iPhone/iPod `model`. Full key reference and per-platform values are below.
+So de1app sets `::ios`/`::iwish` from an Apple `manufacturer` + an
+iPad/iPhone/iPod `model` (iWish is iOS-only). Full key reference below.
 
 ---
 
@@ -61,7 +60,7 @@ The per-platform fills:
 |---|---|---|---|---|
 | `manufacturer` | device maker (`Teclast`) | `Apple` | `Apple` | `Apple` |
 | `brand` | device brand | `Apple` | `Apple` | `Apple` |
-| `product` | build product (`M50Mini`) | **`undroidwish`** | **`iWish`** | **`iWish`** |
+| `product` | build product (`M50Mini`) | `MacBook Air` (`system_profiler`) | `iPad` / `iPhone` | `Mac` |
 | `model` | `M50Mini` | `Mac16,12` (`hw.model`) | `iPad13,1` (`hw.machine`) | `Mac16,12` (`hw.model`) |
 | `device` | `M50Mini` | = model | = model | = model |
 | `cpu_abi` | `arm64-v8a` | `arm64` (`hw.machine`) | `arm64` | `arm64` |
@@ -81,28 +80,25 @@ The per-platform fills:
 set bi [borg osbuildinfo]
 set apple [expr {[dict exists $bi manufacturer] && [dict get $bi manufacturer] eq "Apple"}]
 
-# Which Apple build? iOS + Catalyst are the same iWish build; desktop is undroidwish.
-set iwish [expr {[dict exists $bi product] && [dict get $bi product] eq "iWish"}]
-
-# Real iOS hardware (iPad/iPhone/iPod) -- NOT Mac Catalyst, whose model is "Mac..".
-set ios [expr {$apple && [dict exists $bi model] \
-               && [regexp {^(iPad|iPhone|iPod)} [dict get $bi model]]}]
+# iWish (iOS-only) = Apple manufacturer + an iPad/iPhone/iPod model.
+set ios   [expr {$apple && [dict exists $bi model] \
+                 && [regexp {^(iPad|iPhone|iPod)} [dict get $bi model]]}]
+set iwish $ios
 ```
 
 | platform | `manufacturer` | `product` | `model` | apple | iwish | ios |
 |---|---|---|---|:--:|:--:|:--:|
 | Android | device maker | build product | device model | 0 | 0 | 0 |
-| macOS desktop (undroidwish) | `Apple` | `undroidwish` | `Mac…` | 1 | 0 | 0 |
-| iWish iOS device / simulator | `Apple` | `iWish` | `iPad…`/`iPhone…` | 1 | 1 | 1 |
-| iWish Mac Catalyst | `Apple` | `iWish` | `Mac…` | 1 | 1 | 0 |
+| macOS desktop (undroidwish) | `Apple` | `MacBook Air` (etc.) | `Mac…` | 1 | 0 | 0 |
+| iWish iOS device | `Apple` | `iPad` / `iPhone` | `iPad…`/`iPhone…` | 1 | 1 | 1 |
 
 ### Rationale / gotchas
 
 - **Standard keys only** — no custom/extra key is added; the platform is read
   entirely from the values above.
-- **`product` carries the build identity** (`undroidwish` vs `iWish`). Necessary
-  because Catalyst-iWish and desktop-undroidwish run on **identical Mac hardware**
-  (same `model`/`manufacturer`/`version.release`) — only the app differs.
+- **`model` is the discriminator** (`iPad`/`iPhone`/`iPod` ⇒ iOS/iWish; `Mac..`
+  ⇒ desktop). **`product` is the friendly product name** (informational).
+  iWish is treated as iOS-only, so there is no separate Mac-Catalyst case.
 - **`model` is read from `sysctl`, not `[UIDevice model]`.** On Mac Catalyst
   `[UIDevice currentDevice].model` returns `"iPad"`, which would make Catalyst
   look like iOS. The iWish borg uses (compile-time, one dylib per target):
@@ -150,7 +146,7 @@ set ios [expr {$apple && [dict exists $bi model] \
 | `toast text ?long?` | native ephemeral Toast overlay | a borderless, top-most Tk overlay that auto-dismisses (2 s / 3.5 s) | same UX, Tk implementation |
 | `spinner bool` | shows/hides a busy indicator | sets/clears the `watch` cursor on `.` | same intent |
 | `displaymetrics` | `density densitydpi width height xdpi ydpi scaleddensity rotation` | **same keys**, computed from CoreGraphics pixel size + physical size; `rotation 0` | same format, different source |
-| `osbuildinfo` | flat `{key value …}` of `android.os.Build.*` | **same key set**, filled with real Apple values from `sysctl` (`manufacturer Apple`, `model` `hw.model`, `product undroidwish`, `cpu_abi` `hw.machine`, `version.release` `kern.osproductversion`, a built `fingerprint`, …) | same shape; platform is read from these standard keys |
+| `osbuildinfo` | flat `{key value …}` of `android.os.Build.*` | **same key set**, filled with real Apple values (`manufacturer Apple`, `model` `hw.model`, `product` the friendly name via `system_profiler`, `cpu_abi` `hw.machine`, `version.release` `kern.osproductversion`, a built `fingerprint`, …) | same shape; platform is read from manufacturer + model |
 | `systemproperties ?name?` | Android system properties | `sysctlbyname(name)`; no name → a representative set | analogous |
 | `networkinfo` | `none` / `wifi` / `mobile …` / type name | `none` / `wifi` / `ethernet` via `getifaddrs` | same vocabulary (no cellular) |
 | `keyboardinfo` | `keyboard … hidden …` from the device config | `keyboard qwerty hidden 0 hardhidden 0` (desktop always has a keyboard) | simplified |

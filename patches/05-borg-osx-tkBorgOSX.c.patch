@@ -1,9 +1,9 @@
 diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
 new file mode 100644
-index 00000000..7d61bf4c
+index 00000000..e7ff2f4a
 --- /dev/null
 +++ b/jni/src/tkBorgOSX.c
-@@ -0,0 +1,1639 @@
+@@ -0,0 +1,1673 @@
 +/*
 + * tkBorgOSX.c --
 + *
@@ -660,6 +660,40 @@ index 00000000..7d61bf4c
 +    Tcl_ListObjAppendElement(NULL, list, Tcl_NewStringObj(v ? v : "", -1));
 +}
 +
++/*
++ * Friendly Apple product name (e.g. "MacBook Air"), cached.  macOS no longer
++ * encodes the product line in hw.model ("Mac16,12"), so we read the marketing
++ * name from system_profiler once.  Falls back to "Mac".
++ */
++static const char *
++BorgMacProduct(void)
++{
++    static char prod[128] = "";
++    static int done = 0;
++
++    if (!done) {
++	FILE *fp;
++
++	done = 1;
++	fp = popen("/usr/sbin/system_profiler SPHardwareDataType 2>/dev/null"
++		   " | /usr/bin/awk -F': ' '/Model Name/{print $2; exit}'", "r");
++	if (fp != NULL) {
++	    if (fgets(prod, sizeof(prod), fp) != NULL) {
++		size_t n = strlen(prod);
++		while (n > 0 && (prod[n-1] == '\n' || prod[n-1] == '\r' ||
++				 prod[n-1] == ' ')) {
++		    prod[--n] = '\0';
++		}
++	    }
++	    pclose(fp);
++	}
++	if (prod[0] == '\0') {
++	    strlcpy(prod, "Mac", sizeof(prod));
++	}
++    }
++    return prod;
++}
++
 +static int
 +BorgOSBuildInfo(Tcl_Interp *interp)
 +{
@@ -686,7 +720,7 @@ index 00000000..7d61bf4c
 +     *   product      "undroidwish"          (the iWish build reports "iWish")
 +     * Android-style fingerprint: brand/product/device:release/id/incr:type/tags
 +     */
-+    snprintf(fp, sizeof(fp), "Apple/undroidwish/%s:%s/%s/0:user/release-keys",
++    snprintf(fp, sizeof(fp), "Apple/Mac/%s:%s/%s/0:user/release-keys",
 +	     model, osver, darwin);
 +
 +    BorgAddKV(list, "version.codename", "REL");
@@ -706,7 +740,7 @@ index 00000000..7d61bf4c
 +    BorgAddKV(list, "id", darwin);
 +    BorgAddKV(list, "manufacturer", "Apple");
 +    BorgAddKV(list, "model", model);
-+    BorgAddKV(list, "product", "undroidwish");
++    BorgAddKV(list, "product", BorgMacProduct());
 +    BorgAddKV(list, "serial", "unknown");
 +    BorgAddKV(list, "tags", "release-keys");
 +    BorgAddKV(list, "time", "0");
