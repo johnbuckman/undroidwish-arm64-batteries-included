@@ -46,6 +46,86 @@ iPad/iPhone/iPod `model`, with no non-standard subcommand or extra key.
 
 ---
 
+## `osbuildinfo` — full key reference & platform identification
+
+`borg osbuildinfo` returns a flat Tcl dict modeled on Android's
+`android.os.Build.*`. Every AndroWish-family build fills these **standard keys**
+with real values for its platform, so callers identify the platform from the
+existing keys — no non-standard `borg platform` subcommand and no custom `os`
+key.
+
+### Keys, per platform
+
+| key | Android (e.g. Teclast) | macOS desktop (undroidwish) | iWish — iOS device | iWish — iOS simulator | iWish — Mac Catalyst |
+|---|---|---|---|---|---|
+| `manufacturer` | device maker (`Teclast`) | `Apple` | `Apple` | `Apple` | `Apple` |
+| `brand` | device brand | `Apple` | `Apple` | `Apple` | `Apple` |
+| `product` | build product (`M50Mini`) | **`undroidwish`** | **`iWish`** | **`iWish`** | **`iWish`** |
+| `model` | `M50Mini` | `Mac16,12` (`hw.model`) | `iPad13,1` (`hw.machine`) | `iPad13,1` (`SIMULATOR_MODEL_IDENTIFIER`) | `Mac16,12` (`hw.model`) |
+| `device` | `M50Mini` | = model | = model | = model | = model |
+| `cpu_abi` | `arm64-v8a` | `arm64` (`hw.machine`) | `arm64` | `arm64` | `arm64` |
+| `version.release` | `14` (Android) | `26.2` (`kern.osproductversion`) | iOS ver (`UIDevice.systemVersion`) | iOS ver | iOS-compat ver |
+| `version.sdk` | `34` (API level) | `0` (n/a) | `0` | `0` | `0` |
+| `board` | `mt6771` | `hw.target` | = model | = model | = model |
+| `hardware` | `mt8788` | `Apple M4` (cpu brand) | = model | = model | = model |
+| `fingerprint` | Android format | `Apple/undroidwish/<model>:<rel>/<darwin>/0:user/release-keys` | `Apple/iWish/<model>:<rel>/0:user/release-keys` | same form | same form |
+| `serial` | `unknown` | `unknown` | `unknown` | `unknown` | `unknown` |
+| `version.codename`/`tags`/`type` | `REL`/`release-keys`/`user` | same | same | same | same |
+| `version.incremental`/`id`/`display` | Android build ids | `kern.osversion` (Darwin, e.g. `25C56`) | — | — | — |
+| `bootloader`/`cpu_abi2`/`radio`/`time` | device values | empty / `0` | empty / `0` | empty / `0` | empty / `0` |
+
+### How a caller identifies the platform
+
+```tcl
+set bi [borg osbuildinfo]
+set apple [expr {[dict exists $bi manufacturer] && [dict get $bi manufacturer] eq "Apple"}]
+
+# Which Apple build? iOS + Catalyst are the same iWish build; desktop is undroidwish.
+set iwish [expr {[dict exists $bi product] && [dict get $bi product] eq "iWish"}]
+
+# Real iOS hardware (iPad/iPhone/iPod) -- NOT Mac Catalyst, whose model is "Mac..".
+set ios [expr {$apple && [dict exists $bi model] \
+               && [regexp {^(iPad|iPhone|iPod)} [dict get $bi model]]}]
+```
+
+| platform | `manufacturer` | `product` | `model` | apple | iwish | ios |
+|---|---|---|---|:--:|:--:|:--:|
+| Android | device maker | build product | device model | 0 | 0 | 0 |
+| macOS desktop (undroidwish) | `Apple` | `undroidwish` | `Mac…` | 1 | 0 | 0 |
+| iWish iOS device / simulator | `Apple` | `iWish` | `iPad…`/`iPhone…` | 1 | 1 | 1 |
+| iWish Mac Catalyst | `Apple` | `iWish` | `Mac…` | 1 | 1 | 0 |
+
+### Rationale / gotchas
+
+- **No `borg platform`, no custom `os` key** — only the standard keys. (`borg
+  platform` was a non-standard de1app/iWish extension, now removed; relying on it
+  was fragile because *which* borg is loaded varied between builds.)
+- **`product` carries the build identity** (`undroidwish` vs `iWish`). Necessary
+  because Catalyst-iWish and desktop-undroidwish run on **identical Mac hardware**
+  (same `model`/`manufacturer`/`version.release`) — only the app differs.
+- **`model` is read from `sysctl`, not `[UIDevice model]`.** On Mac Catalyst
+  `[UIDevice currentDevice].model` returns `"iPad"`, which would make Catalyst
+  look like iOS. The iWish borg uses (compile-time, one dylib per target):
+  `hw.machine` on iOS, `SIMULATOR_MODEL_IDENTIFIER` in the simulator, `hw.model`
+  on Catalyst. The macOS port uses `hw.model`.
+- **`version.sdk` is Android-only** (the API level — `34` = Android 14). No Apple
+  equivalent, so `0` on Apple. The strongest "this is Android" tells are
+  `version.sdk` (a real API level), the Android-format `fingerprint`, and
+  `cpu_abi arm64-v8a`.
+- **Android is not detected via osbuildinfo** by de1app — it uses the presence of
+  the real `ble`/`BLT` packages. osbuildinfo's role here is to split the *Apple*
+  builds (iOS vs Catalyst vs desktop).
+
+### Where this is implemented
+- macOS desktop (undroidwish): `jni/src/tkBorgOSX.c` → `BorgOSBuildInfo()` (this
+  patch set, `patches/05`).
+- iWish (iOS/iPadOS/Catalyst): `tclBorgios.m` `osbuildinfo` case — see
+  [`johnbuckman/iwish` → `src-ios/borg-ios/OSBUILDINFO.md`](https://github.com/johnbuckman/iwish/blob/main/src-ios/borg-ios/OSBUILDINFO.md).
+- de1app consumer: `de1plus/ios.tcl` (`::iwish`/`::ios`) and `de1plus/utils.tcl`
+  (`running_on_ios`).
+
+---
+
 ## Legend
 
 | mark | meaning |
