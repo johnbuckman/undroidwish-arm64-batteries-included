@@ -1,9 +1,9 @@
 diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
 new file mode 100644
-index 00000000..68ea5485
+index 00000000..7d61bf4c
 --- /dev/null
 +++ b/jni/src/tkBorgOSX.c
-@@ -0,0 +1,1604 @@
+@@ -0,0 +1,1639 @@
 +/*
 + * tkBorgOSX.c --
 + *
@@ -167,20 +167,55 @@ index 00000000..68ea5485
 +
 +static const char borgTkHelpers[] =
 +"namespace eval ::borg::ui {}\n"
++/* Find a Canvas widget to draw the toast onto (true anti-aliased rounded
++ * corners, since sdl2tk has no per-pixel window transparency). */
++"proc ::borg::ui::_findcanvas {} {\n"
++"  set q [list .]\n"
++"  while {[llength $q]} {\n"
++"    set w [lindex $q 0]; set q [lrange $q 1 end]\n"
++"    if {[winfo exists $w] && [winfo class $w] eq {Canvas}} { return $w }\n"
++"    catch { foreach c [winfo children $w] { lappend q $c } }\n"
++"  }\n"
++"  return {}\n"
++"}\n"
++/* Rounded-rectangle as a smooth (AGG anti-aliased) polygon. */
++"proc ::borg::ui::_roundrect {c x1 y1 x2 y2 r args} {\n"
++"  set p [list $x1 [expr {$y1+$r}] $x1 $y1 [expr {$x1+$r}] $y1 [expr {$x2-$r}] $y1 $x2 $y1 $x2 [expr {$y1+$r}] $x2 [expr {$y2-$r}] $x2 $y2 [expr {$x2-$r}] $y2 [expr {$x1+$r}] $y2 $x1 $y2 $x1 [expr {$y2-$r}]]\n"
++"  return [$c create polygon $p -smooth true {*}$args]\n"
++"}\n"
 +"proc ::borg::ui::toast {text {long 0}} {\n"
 +"  if {[catch {package present Tk}]} { return }\n"
++"  set ms [expr {$long ? 3500 : 2000}]\n"
++"  set c [::borg::ui::_findcanvas]\n"
++"  if {$c ne {}} {\n"
++"    catch {$c delete _borgtoast}\n"
++"    set cw [winfo width $c]; set ch [winfo height $c]\n"
++"    if {$cw < 50} { set cw [winfo screenwidth $c] }\n"
++"    if {$ch < 50} { set ch [winfo screenheight $c] }\n"
++"    set fs [expr {int($ch/30.0)}]; if {$fs < 14} { set fs 14 }\n"
++"    set tx [expr {$cw/2}]; set ty [expr {int($ch*0.82)}]\n"
++"    set tid [$c create text $tx $ty -text $text -fill white -anchor center -justify center -font [list Helvetica $fs] -width [expr {int($cw*0.8)}] -tags _borgtoast]\n"
++"    lassign [$c bbox $tid] bx1 by1 bx2 by2\n"
++"    set padx $fs; set pady [expr {int($fs*0.7)}]; set r [expr {int($fs*1.4)}]\n"
++"    set rid [::borg::ui::_roundrect $c [expr {$bx1-$padx}] [expr {$by1-$pady}] [expr {$bx2+$padx}] [expr {$by2+$pady}] $r -fill black -outline {} -tags _borgtoast]\n"
++"    $c lower $rid $tid\n"
++"    after $ms [list catch [list $c delete _borgtoast]]\n"
++"    return\n"
++"  }\n"
++/* Fallback (no canvas): borderless toplevel, white-on-black (rectangular --
++ * sdl2tk can't shape a window). */
 +"  catch {destroy ._borgtoast}\n"
 +"  set t [toplevel ._borgtoast -bg black -bd 0 -highlightthickness 0]\n"
 +"  catch {wm overrideredirect $t 1}\n"
 +"  catch {wm attributes $t -topmost 1}\n"
-+"  catch {wm attributes $t -alpha 0.85}\n"
++"  catch {wm attributes $t -alpha 0.9}\n"
 +"  label $t.l -text $text -fg white -bg black -padx 24 -pady 14\n"
 +"  pack $t.l\n"
 +"  update idletasks\n"
 +"  set sw [winfo screenwidth $t]; set sh [winfo screenheight $t]\n"
 +"  set w [winfo reqwidth $t.l]; set h [winfo reqheight $t.l]\n"
 +"  catch {wm geometry $t +[expr {($sw-$w)/2}]+[expr {int($sh*0.8)}]}\n"
-+"  after [expr {$long ? 3500 : 2000}] [list destroy $t]\n"
++"  after $ms [list destroy $t]\n"
 +"}\n"
 +"proc ::borg::ui::spinner {on} {\n"
 +"  if {[catch {package present Tk}]} { return }\n"
