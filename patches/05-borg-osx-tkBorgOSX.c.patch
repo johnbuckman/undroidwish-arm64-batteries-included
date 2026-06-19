@@ -1,9 +1,9 @@
 diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
 new file mode 100644
-index 00000000..830ed2e9
+index 00000000..68ea5485
 --- /dev/null
 +++ b/jni/src/tkBorgOSX.c
-@@ -0,0 +1,1595 @@
+@@ -0,0 +1,1604 @@
 +/*
 + * tkBorgOSX.c --
 + *
@@ -630,40 +630,49 @@ index 00000000..830ed2e9
 +{
 +    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
 +    char osver[128], darwin[128], model[128], machine[64], cpu[256], host[256];
++    char target[128], fp[1024];
 +
 +    BorgSysctlStr("kern.osproductversion", osver, sizeof(osver));
 +    BorgSysctlStr("kern.osversion", darwin, sizeof(darwin));
 +    BorgSysctlStr("hw.model", model, sizeof(model));
 +    BorgSysctlStr("hw.machine", machine, sizeof(machine));
 +    BorgSysctlStr("machdep.cpu.brand_string", cpu, sizeof(cpu));
++    if (!BorgSysctlStr("hw.target", target, sizeof(target))) {
++	target[0] = '\0';
++    }
 +    if (gethostname(host, sizeof(host)) != 0) host[0] = '\0';
 +
 +    /*
-+     * "os" identifies the platform so callers can distinguish builds without a
-+     * separate (non-standard) "borg platform" subcommand: "osx" here, vs
-+     * "ios"/"iossimulator"/"maccatalyst" from the iWish borg, vs absent on
-+     * Android.  de1app reads `dict get [borg osbuildinfo] os`.
++     * Fill the standard (Android-shaped) osbuildinfo keys with real Apple
++     * values so callers identify the platform from the EXISTING keys -- no
++     * non-standard "borg platform"/"os" key needed:
++     *   manufacturer "Apple"  -> Apple (vs the device maker on Android)
++     *   model        hw.model -> "Mac..."  (iWish reports "iPad.."/"iPhone.." on iOS)
++     *   product      "undroidwish"          (the iWish build reports "iWish")
++     * Android-style fingerprint: brand/product/device:release/id/incr:type/tags
 +     */
-+    BorgAddKV(list, "os", "osx");
++    snprintf(fp, sizeof(fp), "Apple/undroidwish/%s:%s/%s/0:user/release-keys",
++	     model, osver, darwin);
++
 +    BorgAddKV(list, "version.codename", "REL");
 +    BorgAddKV(list, "version.incremental", darwin);
 +    BorgAddKV(list, "version.release", osver);
-+    BorgAddKV(list, "version.sdk", "0");
-+    BorgAddKV(list, "board", model);
++    BorgAddKV(list, "version.sdk", "0");	/* Android API level; no Apple equiv */
++    BorgAddKV(list, "board", target[0] ? target : model);
 +    BorgAddKV(list, "bootloader", "");
 +    BorgAddKV(list, "brand", "Apple");
 +    BorgAddKV(list, "cpu_abi", machine);
 +    BorgAddKV(list, "cpu_abi2", "");
 +    BorgAddKV(list, "device", model);
 +    BorgAddKV(list, "display", darwin);
-+    BorgAddKV(list, "fingerprint", "");
++    BorgAddKV(list, "fingerprint", fp);
 +    BorgAddKV(list, "hardware", cpu);
 +    BorgAddKV(list, "host", host);
 +    BorgAddKV(list, "id", darwin);
 +    BorgAddKV(list, "manufacturer", "Apple");
 +    BorgAddKV(list, "model", model);
-+    BorgAddKV(list, "product", model);
-+    BorgAddKV(list, "serial", "");
++    BorgAddKV(list, "product", "undroidwish");
++    BorgAddKV(list, "serial", "unknown");
 +    BorgAddKV(list, "tags", "release-keys");
 +    BorgAddKV(list, "time", "0");
 +    BorgAddKV(list, "type", "user");
