@@ -1,9 +1,9 @@
 diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
 new file mode 100644
-index 00000000..e7ff2f4a
+index 00000000..970448bf
 --- /dev/null
 +++ b/jni/src/tkBorgOSX.c
-@@ -0,0 +1,1673 @@
+@@ -0,0 +1,1707 @@
 +/*
 + * tkBorgOSX.c --
 + *
@@ -183,9 +183,43 @@ index 00000000..e7ff2f4a
 +"  set p [list $x1 [expr {$y1+$r}] $x1 $y1 [expr {$x1+$r}] $y1 [expr {$x2-$r}] $y1 $x2 $y1 $x2 [expr {$y1+$r}] $x2 [expr {$y2-$r}] $x2 $y2 [expr {$x2-$r}] $y2 [expr {$x1+$r}] $y2 $x1 $y2 $x1 [expr {$y2-$r}]]\n"
 +"  return [$c create polygon $p -smooth true {*}$args]\n"
 +"}\n"
++/* SDL-layer toast: render the rounded toast onto an offscreen canvas with a
++ * magenta (chroma-key) background, then hand the pixels to the SDL present
++ * layer (sdltk borgtoast) so it is always foreground -- never hidden behind a
++ * blt::graph or other non-canvas widget.  Errors out if sdltk borgtoast is
++ * not available so the caller can fall back to the in-canvas overlay. */
++"proc ::borg::ui::_toast_sdl {text ms} {\n"
++"  set key #ff00ff\n"
++"  set sw [winfo screenwidth .]\n"
++"  set sh [winfo screenheight .]\n"
++"  set fs [expr {int($sh/30.0)}]; if {$fs < 14} { set fs 14 }\n"
++"  catch {destroy ._borgtoast}\n"
++"  set rc [catch {\n"
++"    set t [toplevel ._borgtoast -bg $key -bd 0 -highlightthickness 0]\n"
++"    wm overrideredirect $t 1\n"
++"    catch {wm attributes $t -topmost 1}\n"
++"    set c [canvas $t.c -bg $key -highlightthickness 0 -bd 0]\n"
++"    pack $c\n"
++"    set padx $fs; set pady [expr {int($fs*0.7)}]; set r [expr {int($fs*1.4)}]\n"
++"    set maxw [expr {int($sw*0.8)}]\n"
++"    set tid [$c create text $padx $pady -text $text -fill white -anchor nw -justify center -font [list Helvetica $fs] -width $maxw -tags t]\n"
++"    lassign [$c bbox $tid] bx1 by1 bx2 by2\n"
++"    set tw [expr {$bx2-$bx1}]; set th [expr {$by2-$by1}]\n"
++"    set W [expr {$tw+2*$padx}]; set H [expr {$th+2*$pady}]\n"
++"    set rid [::borg::ui::_roundrect $c 0 0 $W $H $r -fill black -outline {} -tags bg]\n"
++"    $c lower $rid $tid\n"
++"    $c configure -width $W -height $H\n"
++"    wm geometry $t ${W}x${H}+[expr {($sw-$W)/2}]+[expr {int($sh*0.82)-$H/2}]\n"
++"    update idletasks\n"
++"    sdltk borgtoast $c $ms\n"
++"  } emsg]\n"
++"  catch {destroy ._borgtoast}\n"
++"  if {$rc} { return -code error $emsg }\n"
++"}\n"
 +"proc ::borg::ui::toast {text {long 0}} {\n"
 +"  if {[catch {package present Tk}]} { return }\n"
 +"  set ms [expr {$long ? 3500 : 2000}]\n"
++"  if {([info commands sdltk] ne {}) && ![catch {::borg::ui::_toast_sdl $text $ms}]} { return }\n"
 +"  set c [::borg::ui::_findcanvas]\n"
 +"  if {$c ne {}} {\n"
 +"    catch {$c delete _borgtoast}\n"

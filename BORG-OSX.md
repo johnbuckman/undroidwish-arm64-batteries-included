@@ -143,7 +143,7 @@ set iwish $ios
 | `stopspeak` | stops TTS | `SIGTERM`s the `say` child | same |
 | `isspeaking` | TTS speaking? | `kill(pid,0)` liveness of the `say` child | same |
 | `endspeak` | stop TTS + release engine | same as `stopspeak` | same (no engine to release) |
-| `toast text ?long?` | native ephemeral Toast overlay | a borderless, top-most Tk overlay that auto-dismisses (2 s / 3.5 s) | same UX, Tk implementation |
+| `toast text ?long?` | native ephemeral Toast overlay | a rounded, anti-aliased panel composited at the **SDL present layer** (always foreground, above any Tk widget incl. `blt::graph`); rendered offscreen on a Tk canvas, captured, and blitted until it auto-dismisses (2 s / 3.5 s). Falls back to the in-canvas overlay if `sdltk borgtoast` is unavailable | same UX, always-foreground SDL implementation |
 | `spinner bool` | shows/hides a busy indicator | sets/clears the `watch` cursor on `.` | same intent |
 | `displaymetrics` | `density densitydpi width height xdpi ydpi scaleddensity rotation` | **same keys**, computed from CoreGraphics pixel size + physical size; `rotation 0` | same format, different source |
 | `osbuildinfo` | flat `{key value …}` of `android.os.Build.*` | **same key set**, filled with real Apple values (`manufacturer Apple`, `model` `hw.model`, `product` the friendly name via `system_profiler`, `cpu_abi` `hw.machine`, `version.release` `kern.osproductversion`, a built `fingerprint`, …) | same shape; platform is read from manufacturer + model |

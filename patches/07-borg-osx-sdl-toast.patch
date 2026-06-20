@@ -1,0 +1,371 @@
+diff --git a/jni/sdl2tk/sdl/SdlTkGfx.c b/jni/sdl2tk/sdl/SdlTkGfx.c
+index e43c9b64..6d0fd2f7 100644
+--- a/jni/sdl2tk/sdl/SdlTkGfx.c
++++ b/jni/sdl2tk/sdl/SdlTkGfx.c
+@@ -16,6 +16,171 @@ static SDL_Surface *cursor_surf = NULL;
+ static SDL_Texture *cursor_tex = NULL;
+ static const unsigned char *cursor_data[2] = { NULL, NULL };
+ 
++/*
++ *----------------------------------------------------------------------
++ * borg toast (SDL-layer, always-foreground rounded toast).
++ *
++ * The Tcl side (sdltk borgtoast) renders the rounded toast onto an
++ * offscreen Tk canvas, captures it as ARGB8888 pixels and hands them here
++ * via SdlTkBorgToastSet().  SdlTkGfxDrawBorgToast() then composites those
++ * pixels on top of every presented frame until the toast expires, so the
++ * toast is always foreground regardless of which Tk widgets (e.g. a
++ * blt::graph) cover the application's own canvas.
++ *
++ * The pixel buffer is shared between the Tcl thread (producer) and the SDL
++ * render thread (consumer), so it is guarded by a mutex.  The SDL_Texture
++ * is created/updated lazily on the render thread, which is the only thread
++ * allowed to touch the renderer.
++ *----------------------------------------------------------------------
++ */
++
++static SDL_mutex   *borg_toast_mtx = NULL;
++static void        *borg_toast_rgba = NULL;	/* ARGB8888, w*h*4, SDL_malloc */
++static int          borg_toast_w = 0, borg_toast_h = 0;
++static Uint32       borg_toast_expire = 0;	/* SDL_GetTicks() deadline */
++static int          borg_toast_dirty = 0;	/* new pixels need upload */
++static SDL_Texture *borg_toast_tex = NULL;
++static int          borg_toast_texw = 0, borg_toast_texh = 0;
++
++static SDL_mutex *
++SdlTkBorgToastMutex(void)
++{
++    if (borg_toast_mtx == NULL) {
++	borg_toast_mtx = SDL_CreateMutex();
++    }
++    return borg_toast_mtx;
++}
++
++/*
++ * True while a toast still needs drawing (pending pixels or a live texture).
++ * SdlTkScreenRefresh() uses this to keep requesting presents until the toast
++ * has expired and been cleared, so it works even on an otherwise static
++ * screen.  Lockless pointer reads: at worst one frame stale, which is benign.
++ */
++int
++SdlTkBorgToastPending(void)
++{
++    return (borg_toast_tex != NULL) || (borg_toast_rgba != NULL);
++}
++
++void
++SdlTkBorgToastSet(const void *rgba, int w, int h, int ms)
++{
++    SDL_mutex *m = SdlTkBorgToastMutex();
++
++    if (m != NULL) {
++	SDL_LockMutex(m);
++    }
++    if (borg_toast_rgba != NULL) {
++	SDL_free(borg_toast_rgba);
++	borg_toast_rgba = NULL;
++    }
++    if ((rgba != NULL) && (w > 0) && (h > 0) && (ms > 0)) {
++	size_t sz = (size_t) w * (size_t) h * 4;
++
++	borg_toast_rgba = SDL_malloc(sz);
++	if (borg_toast_rgba != NULL) {
++	    memcpy(borg_toast_rgba, rgba, sz);
++	    borg_toast_w = w;
++	    borg_toast_h = h;
++	    borg_toast_expire = SDL_GetTicks() + (Uint32) ms;
++	    borg_toast_dirty = 1;
++	}
++    } else {
++	/* explicit clear */
++	borg_toast_expire = 0;
++    }
++    if (m != NULL) {
++	SDL_UnlockMutex(m);
++    }
++    /* Wake the render loop so the toast appears promptly. */
++    SdlTkX.draw_later |= (SDLTKX_DRAW | SDLTKX_DRAWALL | SDLTKX_PRESENT);
++}
++
++static void
++SdlTkGfxDrawBorgToast(SDL_Renderer *rend)
++{
++    SDL_mutex *m = borg_toast_mtx;
++    Uint32 now = SDL_GetTicks();
++    int have = 0, tw = 0, th = 0;
++
++    if (m != NULL) {
++	SDL_LockMutex(m);
++    }
++
++    /* Expired (or never set): drop texture + buffer and bail. */
++    if ((borg_toast_expire == 0) || (now >= borg_toast_expire)) {
++	if (borg_toast_tex != NULL) {
++	    SDL_DestroyTexture(borg_toast_tex);
++	    borg_toast_tex = NULL;
++	}
++	if (borg_toast_rgba != NULL) {
++	    SDL_free(borg_toast_rgba);
++	    borg_toast_rgba = NULL;
++	}
++	if (m != NULL) {
++	    SDL_UnlockMutex(m);
++	}
++	return;
++    }
++
++    /* (Re)upload pixels if a new toast arrived. */
++    if (borg_toast_dirty && (borg_toast_rgba != NULL)) {
++	if ((borg_toast_tex != NULL) &&
++	    ((borg_toast_texw != borg_toast_w) ||
++	     (borg_toast_texh != borg_toast_h))) {
++	    SDL_DestroyTexture(borg_toast_tex);
++	    borg_toast_tex = NULL;
++	}
++	if (borg_toast_tex == NULL) {
++	    borg_toast_tex = SDL_CreateTexture(rend, SDL_PIXELFORMAT_ARGB8888,
++					       SDL_TEXTUREACCESS_STATIC,
++					       borg_toast_w, borg_toast_h);
++	    borg_toast_texw = borg_toast_w;
++	    borg_toast_texh = borg_toast_h;
++	    if (borg_toast_tex != NULL) {
++		SDL_SetTextureBlendMode(borg_toast_tex, SDL_BLENDMODE_BLEND);
++	    }
++	}
++	if (borg_toast_tex != NULL) {
++	    SDL_UpdateTexture(borg_toast_tex, NULL, borg_toast_rgba,
++			      borg_toast_w * 4);
++	}
++	borg_toast_dirty = 0;
++    }
++
++    if (borg_toast_tex != NULL) {
++	have = 1;
++	tw = borg_toast_texw;
++	th = borg_toast_texh;
++    }
++    if (m != NULL) {
++	SDL_UnlockMutex(m);
++    }
++
++    if (have) {
++	int ow = 0, oh = 0;
++	SDL_Rect dst;
++
++	SDL_GetRendererOutputSize(rend, &ow, &oh);
++	if ((ow <= 0) || (oh <= 0)) {
++	    ow = tw;
++	    oh = th;
++	}
++	dst.w = (tw > ow) ? ow : tw;
++	dst.h = (th > oh) ? oh : th;
++	dst.x = (ow - dst.w) / 2;
++	dst.y = (int) (oh * 0.82) - dst.h / 2;
++	if (dst.y < 0) {
++	    dst.y = 0;
++	}
++	if (dst.y + dst.h > oh) {
++	    dst.y = oh - dst.h;
++	}
++	SDL_RenderCopy(rend, borg_toast_tex, NULL, &dst);
++    }
++}
++
+ void
+ SdlTkSetSWCursor(const unsigned char *data)
+ {
+@@ -886,6 +1051,13 @@ SdlTkGfxUpdateRegion(SDL_Renderer *rend, SDL_Texture *tex,
+     long i;
+     int count = 0;
+ 
++    /* iwish: the desktop (root) area is not always re-marked dirty after expose,
++     * so sync the whole surface to the texture each present to keep the
++     * background colour correct. */
++    if (surf && tex) {
++	SDL_UpdateTexture(tex, NULL, surf->pixels, surf->pitch);
++    }
++
+     if (SdlTkX.draw_later & SDLTKX_RENDCLR2) {
+ 	SdlTkX.draw_later &= ~SDLTKX_RENDCLR2;
+ 	SDL_SetRenderDrawColor(SdlTkX.sdlrend, 0, 0, 0, 255);
+@@ -955,6 +1127,7 @@ SdlTkGfxUpdateRegion(SDL_Renderer *rend, SDL_Texture *tex,
+ 	if (SdlTkX.arg_swcursor > 0) {
+ 	    DrawSWCursor(rend, tex);
+ 	}
++	SdlTkGfxDrawBorgToast(rend);
+ 	SDL_RenderPresent(rend);
+     }
+ #endif
+@@ -979,6 +1152,7 @@ SdlTkGfxPresent(SDL_Renderer *rend, SDL_Texture *tex)
+     if (SdlTkX.arg_swcursor > 0) {
+ 	DrawSWCursor(rend, tex);
+     }
++    SdlTkGfxDrawBorgToast(rend);
+ #endif
+     SDL_RenderPresent(rend);
+ }
+diff --git a/jni/sdl2tk/sdl/SdlTkInt.c b/jni/sdl2tk/sdl/SdlTkInt.c
+index e460ebf6..352cb901 100644
+--- a/jni/sdl2tk/sdl/SdlTkInt.c
++++ b/jni/sdl2tk/sdl/SdlTkInt.c
+@@ -265,6 +265,13 @@ SdlTkScreenRefresh(void)
+     SDL_GLContext currgl;
+ #endif
+ 
++    /* Keep presenting while a borg toast is live (or just expired and needs
++     * one clearing frame), so it shows and disappears even on a static screen
++     * that would otherwise stop presenting. */
++    if (SdlTkBorgToastPending()) {
++	SdlTkX.draw_later |= SDLTKX_PRESENT;
++    }
++
+     if ((SdlTkX.draw_later & (SDLTKX_DRAW | SDLTKX_DRAWALL | SDLTKX_PRESENT))
+ 	== SDLTKX_PRESENT) {
+ 	SdlTkGfxPresent(SdlTkX.sdlrend, SdlTkX.sdltex);
+@@ -4574,6 +4581,125 @@ PowerinfoObjCmd(ClientData clientData, Tcl_Interp *interp,
+     return TCL_OK;
+ }
+ 
++/*
++ *----------------------------------------------------------------------
++ *
++ * BorgtoastObjCmd --
++ *
++ *	sdltk borgtoast WINDOW MS
++ *
++ *	Capture the pixels of WINDOW (an already-rendered, offscreen Tk
++ *	canvas holding a rounded toast on a pure-magenta background) and
++ *	hand them to the SDL present layer so they are composited on top of
++ *	every frame -- always foreground -- for MS milliseconds.  The
++ *	magenta background is chroma-keyed to full transparency so only the
++ *	rounded toast shows.  See SdlTkGfxDrawBorgToast() in SdlTkGfx.c.
++ *
++ *----------------------------------------------------------------------
++ */
++
++static int
++BorgtoastObjCmd(ClientData clientData, Tcl_Interp *interp,
++		int objc, Tcl_Obj *const objv[])
++{
++    Tk_Window tkwin = (Tk_Window) clientData;
++    Tk_Window toast;
++    int ms, w, h, i, n;
++    _Window *_w;
++    Display *display;
++    XImage *img;
++    SDL_Surface *src, *conv;
++    Uint32 *px;
++    void *packed = NULL;
++    int ret = TCL_OK;
++
++    if (objc != 3) {
++	Tcl_WrongNumArgs(interp, 1, objv, "window ms");
++	return TCL_ERROR;
++    }
++    if (TkGetWindowFromObj(interp, tkwin, objv[1], &toast) != TCL_OK) {
++	return TCL_ERROR;
++    }
++    if (Tcl_GetIntFromObj(interp, objv[2], &ms) != TCL_OK) {
++	return TCL_ERROR;
++    }
++    Tk_MakeWindowExist(toast);
++    w = Tk_Width(toast);
++    h = Tk_Height(toast);
++    if ((w <= 0) || (h <= 0)) {
++	Tcl_SetObjResult(interp,
++			 Tcl_NewStringObj("toast window has no size", -1));
++	return TCL_ERROR;
++    }
++    display = Tk_Display(toast);
++    _w = (_Window *) ((TkWindow *) toast)->window;
++
++    /* XGetImage takes the xlib lock itself; SdlTkLock is non-recursive, so we
++     * must NOT be holding it here or we deadlock. */
++    img = XGetImage(display, (Drawable) _w, 0, 0,
++		    (unsigned) w, (unsigned) h, AllPlanes, ZPixmap);
++    if (img == NULL) {
++	Tcl_SetObjResult(interp,
++			 Tcl_NewStringObj("toast capture failed", -1));
++	return TCL_ERROR;
++    }
++
++    /* Wrap the captured pixels (root-surface format) and convert to a
++     * known ARGB8888 layout we can hand to the renderer. */
++    src = SDL_CreateRGBSurfaceFrom(img->data, w, h,
++	    SdlTkX.sdlsurf->format->BitsPerPixel, img->bytes_per_line,
++	    SdlTkX.sdlsurf->format->Rmask, SdlTkX.sdlsurf->format->Gmask,
++	    SdlTkX.sdlsurf->format->Bmask, SdlTkX.sdlsurf->format->Amask);
++    if (src == NULL) {
++	XDestroyImage(img);
++	Tcl_SetObjResult(interp,
++			 Tcl_NewStringObj("toast surface failed", -1));
++	return TCL_ERROR;
++    }
++    conv = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
++    SDL_FreeSurface(src);
++    XDestroyImage(img);
++    if (conv == NULL) {
++	Tcl_SetObjResult(interp,
++			 Tcl_NewStringObj("toast convert failed", -1));
++	return TCL_ERROR;
++    }
++
++    /* Chroma-key: the magenta canvas background -> transparent; everything
++     * else -> opaque.  Anti-aliased edges (black/magenta blends) keep their
++     * colour and stay opaque, giving a soft edge with no magenta halo. */
++    px = (Uint32 *) conv->pixels;
++    n = (conv->pitch / 4) * h;
++    for (i = 0; i < n; i++) {
++	Uint32 p = px[i];
++	int r = (p >> 16) & 0xFF;
++	int g = (p >>  8) & 0xFF;
++	int b = (p      ) & 0xFF;
++
++	if ((r > 180) && (g < 80) && (b > 180)) {
++	    px[i] = 0;				/* transparent */
++	} else {
++	    px[i] = 0xFF000000u | (p & 0x00FFFFFFu); /* opaque */
++	}
++    }
++
++    /* SdlTkBorgToastSet wants tightly packed w*4 rows. */
++    if (conv->pitch != w * 4) {
++	packed = ckalloc((size_t) w * h * 4);
++	for (i = 0; i < h; i++) {
++	    memcpy((char *) packed + (size_t) i * w * 4,
++		   (char *) conv->pixels + (size_t) i * conv->pitch,
++		   (size_t) w * 4);
++	}
++	SdlTkBorgToastSet(packed, w, h, ms);
++	ckfree(packed);
++    } else {
++	SdlTkBorgToastSet(conv->pixels, w, h, ms);
++    }
++    SDL_FreeSurface(conv);
++    return ret;
++}
++
+ static int
+ RestoreObjCmd(ClientData clientData, Tcl_Interp *interp,
+ 	       int objc, Tcl_Obj *const objv[])
+@@ -5102,6 +5228,7 @@ static const TkEnsemble sdltkCmdMap[] = {
+     { "accelerometer", AccelerometerObjCmd, NULL },
+     { "addfont", AddfontObjCmd, NULL },
+     { "android", AndroidObjCmd, NULL },
++    { "borgtoast", BorgtoastObjCmd, NULL },
+     { "deiconify", DeiconifyObjCmd, NULL },
+     { "expose", ExposeObjCmd, NULL },
+     { "fonts", FontsObjCmd, NULL },
+diff --git a/jni/sdl2tk/sdl/SdlTkInt.h b/jni/sdl2tk/sdl/SdlTkInt.h
+index 9156a698..3b3d809f 100644
+--- a/jni/sdl2tk/sdl/SdlTkInt.h
++++ b/jni/sdl2tk/sdl/SdlTkInt.h
+@@ -389,6 +389,8 @@ extern int SdlTkGfxTextWidth(Font f, const char *string, int length, int *maxw);
+ 
+ /* SdlTkGfx.c */
+ extern void SdlTkSetSWCursor(const unsigned char *data);
++extern void SdlTkBorgToastSet(const void *rgba, int w, int h, int ms);
++extern int SdlTkBorgToastPending(void);
+ extern int SdlTkPixelFormat(SDL_Surface *sdl);
+ extern void SdlTkGfxBlitRegion(SDL_Surface *src, Region rgn,
+     SDL_Surface *dest, int dest_x, int dest_y);
