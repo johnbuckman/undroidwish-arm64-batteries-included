@@ -122,6 +122,6 @@ returning the Android-shaped empty value. Full per-command status is in
 ## License
 
 The patches, scripts, and documentation in this repository are licensed under
-the **GNU General Public License v3.0** (see [`LICENSE`](LICENSE)). They are
+the **Tcl/Tk license** (a BSD-style license; see [`LICENSE`](LICENSE)). They are
 modifications to / instructions for the AndroWish project; **AndroWish and the
 third-party libraries it bundles retain their own original licenses.**
