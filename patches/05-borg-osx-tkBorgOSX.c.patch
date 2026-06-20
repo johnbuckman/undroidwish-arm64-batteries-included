@@ -1,6 +1,6 @@
 diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
 new file mode 100644
-index 00000000..970448bf
+index 00000000..dc2ec67d
 --- /dev/null
 +++ b/jni/src/tkBorgOSX.c
 @@ -0,0 +1,1707 @@
@@ -206,7 +206,7 @@ index 00000000..970448bf
 +"    lassign [$c bbox $tid] bx1 by1 bx2 by2\n"
 +"    set tw [expr {$bx2-$bx1}]; set th [expr {$by2-$by1}]\n"
 +"    set W [expr {$tw+2*$padx}]; set H [expr {$th+2*$pady}]\n"
-+"    set rid [::borg::ui::_roundrect $c 0 0 $W $H $r -fill black -outline {} -tags bg]\n"
++"    set rid [::borg::ui::_roundrect $c 0 0 $W $H $r -fill #444444 -outline {} -tags bg]\n"
 +"    $c lower $rid $tid\n"
 +"    $c configure -width $W -height $H\n"
 +"    wm geometry $t ${W}x${H}+[expr {($sw-$W)/2}]+[expr {int($sh*0.82)-$H/2}]\n"
@@ -231,7 +231,7 @@ index 00000000..970448bf
 +"    set tid [$c create text $tx $ty -text $text -fill white -anchor center -justify center -font [list Helvetica $fs] -width [expr {int($cw*0.8)}] -tags _borgtoast]\n"
 +"    lassign [$c bbox $tid] bx1 by1 bx2 by2\n"
 +"    set padx $fs; set pady [expr {int($fs*0.7)}]; set r [expr {int($fs*1.4)}]\n"
-+"    set rid [::borg::ui::_roundrect $c [expr {$bx1-$padx}] [expr {$by1-$pady}] [expr {$bx2+$padx}] [expr {$by2+$pady}] $r -fill black -outline {} -tags _borgtoast]\n"
++"    set rid [::borg::ui::_roundrect $c [expr {$bx1-$padx}] [expr {$by1-$pady}] [expr {$bx2+$padx}] [expr {$by2+$pady}] $r -fill #444444 -outline {} -tags _borgtoast]\n"
 +"    $c lower $rid $tid\n"
 +"    after $ms [list catch [list $c delete _borgtoast]]\n"
 +"    return\n"
@@ -239,11 +239,11 @@ index 00000000..970448bf
 +/* Fallback (no canvas): borderless toplevel, white-on-black (rectangular --
 + * sdl2tk can't shape a window). */
 +"  catch {destroy ._borgtoast}\n"
-+"  set t [toplevel ._borgtoast -bg black -bd 0 -highlightthickness 0]\n"
++"  set t [toplevel ._borgtoast -bg #444444 -bd 0 -highlightthickness 0]\n"
 +"  catch {wm overrideredirect $t 1}\n"
 +"  catch {wm attributes $t -topmost 1}\n"
 +"  catch {wm attributes $t -alpha 0.9}\n"
-+"  label $t.l -text $text -fg white -bg black -padx 24 -pady 14\n"
++"  label $t.l -text $text -fg white -bg #444444 -padx 24 -pady 14\n"
 +"  pack $t.l\n"
 +"  update idletasks\n"
 +"  set sw [winfo screenwidth $t]; set sh [winfo screenheight $t]\n"
