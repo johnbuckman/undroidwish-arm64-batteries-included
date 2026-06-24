@@ -240,6 +240,15 @@ dependency. Per-command status: [`BORG-OSX.md`](BORG-OSX.md).
 `${PFX_HERE}/lib/Borg1.0/` with a `pkgIndex.tcl`, and the assets-assembly step
 copies `Borg*` into `assets.zip`.
 
+**G3** Toast geometry (`patches/05`, `patches/07`): the `borg toast` overlay is
+**sized in Tcl** — `tkBorgOSX.c` `::borg::ui::_toast_sdl` uses font
+`int(sh/30*0.7)` (~30% smaller) and the box scales with it — but
+**positioned in C**. `SdlTkGfxDrawBorgToast()` (`SdlTkGfx.c`) composites the
+captured pixels at `dst.y = oh - dst.h - oh*0.02`, i.e. sitting against the
+bottom edge with a ~2% margin. GOTCHA: the Tcl `wm geometry` of the toast
+toplevel only places the *offscreen capture* window whose pixels are grabbed;
+it does NOT control the on-screen position — that is solely the C compositor.
+
 Verified on Apple Silicon (macOS 26 / Darwin 25): all documented subcommands
 load and run; native commands return correct data; malformed calls still report
 the usual `wrong # args` / `bad option` diagnostics.

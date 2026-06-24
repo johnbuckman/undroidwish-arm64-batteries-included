@@ -1,6 +1,6 @@
 diff --git a/jni/src/tkBorgOSX.c b/jni/src/tkBorgOSX.c
 new file mode 100644
-index 00000000..dc2ec67d
+index 00000000..dff0b59f
 --- /dev/null
 +++ b/jni/src/tkBorgOSX.c
 @@ -0,0 +1,1707 @@
@@ -192,7 +192,7 @@ index 00000000..dc2ec67d
 +"  set key #ff00ff\n"
 +"  set sw [winfo screenwidth .]\n"
 +"  set sh [winfo screenheight .]\n"
-+"  set fs [expr {int($sh/30.0)}]; if {$fs < 14} { set fs 14 }\n"
++"  set fs [expr {int($sh/30.0*0.7)}]; if {$fs < 10} { set fs 10 }\n"
 +"  catch {destroy ._borgtoast}\n"
 +"  set rc [catch {\n"
 +"    set t [toplevel ._borgtoast -bg $key -bd 0 -highlightthickness 0]\n"
@@ -209,7 +209,7 @@ index 00000000..dc2ec67d
 +"    set rid [::borg::ui::_roundrect $c 0 0 $W $H $r -fill #444444 -outline {} -tags bg]\n"
 +"    $c lower $rid $tid\n"
 +"    $c configure -width $W -height $H\n"
-+"    wm geometry $t ${W}x${H}+[expr {($sw-$W)/2}]+[expr {int($sh*0.82)-$H/2}]\n"
++"    wm geometry $t ${W}x${H}+[expr {($sw-$W)/2}]+[expr {$sh-$H-int($sh*0.02)}]\n"
 +"    update idletasks\n"
 +"    sdltk borgtoast $c $ms\n"
 +"  } emsg]\n"
@@ -226,8 +226,8 @@ index 00000000..dc2ec67d
 +"    set cw [winfo width $c]; set ch [winfo height $c]\n"
 +"    if {$cw < 50} { set cw [winfo screenwidth $c] }\n"
 +"    if {$ch < 50} { set ch [winfo screenheight $c] }\n"
-+"    set fs [expr {int($ch/30.0)}]; if {$fs < 14} { set fs 14 }\n"
-+"    set tx [expr {$cw/2}]; set ty [expr {int($ch*0.82)}]\n"
++"    set fs [expr {int($ch/30.0*0.7)}]; if {$fs < 10} { set fs 10 }\n"
++"    set tx [expr {$cw/2}]; set ty [expr {int($ch*0.964)}]\n"
 +"    set tid [$c create text $tx $ty -text $text -fill white -anchor center -justify center -font [list Helvetica $fs] -width [expr {int($cw*0.8)}] -tags _borgtoast]\n"
 +"    lassign [$c bbox $tid] bx1 by1 bx2 by2\n"
 +"    set padx $fs; set pady [expr {int($fs*0.7)}]; set r [expr {int($fs*1.4)}]\n"
@@ -243,12 +243,12 @@ index 00000000..dc2ec67d
 +"  catch {wm overrideredirect $t 1}\n"
 +"  catch {wm attributes $t -topmost 1}\n"
 +"  catch {wm attributes $t -alpha 0.9}\n"
-+"  label $t.l -text $text -fg white -bg #444444 -padx 24 -pady 14\n"
++"  label $t.l -text $text -fg white -bg #444444 -padx 17 -pady 10\n"
 +"  pack $t.l\n"
 +"  update idletasks\n"
 +"  set sw [winfo screenwidth $t]; set sh [winfo screenheight $t]\n"
 +"  set w [winfo reqwidth $t.l]; set h [winfo reqheight $t.l]\n"
-+"  catch {wm geometry $t +[expr {($sw-$w)/2}]+[expr {int($sh*0.8)}]}\n"
++"  catch {wm geometry $t +[expr {($sw-$w)/2}]+[expr {$sh-$h-int(($sh-int($sh*0.8)-$h)*0.2)}]}\n"
 +"  after $ms [list destroy $t]\n"
 +"}\n"
 +"proc ::borg::ui::spinner {on} {\n"

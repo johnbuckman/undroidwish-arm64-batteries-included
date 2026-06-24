@@ -160,7 +160,7 @@ index e43c9b64..6d0fd2f7 100644
 +	dst.w = (tw > ow) ? ow : tw;
 +	dst.h = (th > oh) ? oh : th;
 +	dst.x = (ow - dst.w) / 2;
-+	dst.y = (int) (oh * 0.82) - dst.h / 2;
++	dst.y = oh - dst.h - (int) (oh * 0.02);	/* toast bottom ~2% above screen bottom */
 +	if (dst.y < 0) {
 +	    dst.y = 0;
 +	}
