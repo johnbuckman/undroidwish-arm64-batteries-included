@@ -99,6 +99,7 @@ final binary needs `/opt/homebrew/lib` on its rpath — see
 | `patches/04-sdl2tk-powerinfo-iokit.patch` | `sdltk powerinfo` via IOKit (real battery, 100 on AC/no-battery) |
 | `patches/05-borg-osx-tkBorgOSX.c.patch` | **new file** `jni/src/tkBorgOSX.c` — a desktop `borg` command for macOS (see [`BORG-OSX.md`](BORG-OSX.md)) |
 | `patches/06-borg-osx-build-undroidwish-macosx.patch` | build + bundle the `Borg` package into `assets.zip` |
+| `patches/08-sdl2tk-fullsync-dirty-rect.patch` | skip the per-present full-surface texture upload except after expose / full redraw (gate it on a new `SDLTKX_FULLSYNC` flag set in `SdlTkScreenRefresh`); steady-state frames upload only the dirty rects |
 
 Apply with `apply-patches.sh`, or individually with `git apply` / `patch -p1`
 from the AndroWish root.

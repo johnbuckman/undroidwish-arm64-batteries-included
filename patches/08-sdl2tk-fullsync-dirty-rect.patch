@@ -1,0 +1,58 @@
+diff --git a/jni/sdl2tk/sdl/SdlTkGfx.c b/jni/sdl2tk/sdl/SdlTkGfx.c
+index fb4c3f6f..7ed2dfdc 100644
+--- a/jni/sdl2tk/sdl/SdlTkGfx.c
++++ b/jni/sdl2tk/sdl/SdlTkGfx.c
+@@ -1051,10 +1051,14 @@ SdlTkGfxUpdateRegion(SDL_Renderer *rend, SDL_Texture *tex,
+     long i;
+     int count = 0;
+ 
+-    /* iwish: the desktop (root) area is not always re-marked dirty after expose,
+-     * so sync the whole surface to the texture each present to keep the
+-     * background colour correct. */
+-    if (surf && tex) {
++    /* iwish: the root background only needs a full surface->texture sync after an
++     * expose / full redraw (flagged via SDLTKX_FULLSYNC in SdlTkScreenRefresh).
++     * In steady state the per-rect loop below uploads exactly the changed pixels,
++     * so we skip the blanket whole-surface upload that used to run every present
++     * (it re-uploaded the entire surface each frame -- pure waste when only a
++     * chart / a few readouts changed). */
++    if (surf && tex && (SdlTkX.draw_later & SDLTKX_FULLSYNC)) {
++	SdlTkX.draw_later &= ~SDLTKX_FULLSYNC;
+ 	SDL_UpdateTexture(tex, NULL, surf->pixels, surf->pitch);
+     }
+ 
+diff --git a/jni/sdl2tk/sdl/SdlTkInt.c b/jni/sdl2tk/sdl/SdlTkInt.c
+index 8dcbf126..d2507c50 100644
+--- a/jni/sdl2tk/sdl/SdlTkInt.c
++++ b/jni/sdl2tk/sdl/SdlTkInt.c
+@@ -334,12 +334,18 @@ SdlTkScreenRefresh(void)
+ 	XUnionRegion(SdlTkX.screen_dirty_region, SdlTkX.screen_update_region,
+ 		     SdlTkX.screen_update_region);
+ 	XSetEmptyRegion(SdlTkX.screen_dirty_region);
++	/* Root background was exposed -> the texture's non-dirty area may be
++	 * stale; request a full surface->texture sync this present. */
++	SdlTkX.draw_later |= SDLTKX_FULLSYNC;
+     }
+ 
+     if (SdlTkX.draw_later & SDLTKX_DRAWALL) {
+ 	XRectangle r;
+ 
+ 	SdlTkX.draw_later &= ~SDLTKX_DRAWALL;
++	/* A full redraw (resize, pan/zoom, show/restore, init) can change the
++	 * whole surface incl. background -> full surface->texture sync. */
++	SdlTkX.draw_later |= SDLTKX_FULLSYNC;
+ 	r.x = r.y = 0;
+ 	r.width = SdlTkX.screen->width;
+ 	r.height = SdlTkX.screen->height;
+diff --git a/jni/sdl2tk/sdl/SdlTkInt.h b/jni/sdl2tk/sdl/SdlTkInt.h
+index 3b3d809f..1262733a 100644
+--- a/jni/sdl2tk/sdl/SdlTkInt.h
++++ b/jni/sdl2tk/sdl/SdlTkInt.h
+@@ -164,6 +164,7 @@ struct _XSQEvent {
+ #define SDLTKX_PRESENT  0x04    /* SDL_RenderPresent() required. */
+ #define SDLTKX_RENDCLR  0x08    /* SDL_RenderClear() on front buffer. */
+ #define SDLTKX_SCALED   0x10    /* Viewport is scaled. */
++#define SDLTKX_FULLSYNC 0x20    /* iwish: full surface->texture upload needed (expose/drawall). */
+ #define SDLTKX_RENDCLR2 0x80    /* SDL_RenderClear() on back buffer. */
+ 
+ typedef struct SdlTkXInfo {

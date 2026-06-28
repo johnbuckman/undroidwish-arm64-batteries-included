@@ -268,3 +268,16 @@ the usual `wrong # args` / `bad option` diagnostics.
 
 The result runs natively on Apple Silicon (verified: `tclsh8.6`/`wish` report
 `arm64`; Tcl regression suite passes — 46090 tests, 1 environment-only failure).
+
+## H — sdl2tk dirty-rect present (patch 08)
+
+`SdlTkGfxUpdateRegion` (non-Android branch) used to `SDL_UpdateTexture(tex, NULL, ...)`
+the **whole** surface on every present (added in patch 07 to keep the root background
+correct after expose). During steady-state animation that re-uploaded the entire
+surface each frame even though the per-rect loop below already uploads the changed
+pixels. Patch 08 gates that full upload on a new `SDLTKX_FULLSYNC` flag, set in
+`SdlTkScreenRefresh` only when the root was exposed (`screen_dirty_region`) or a full
+redraw was requested (`SDLTKX_DRAWALL`: resize, pan/zoom, show/restore, init). So the
+background guard still fires on every background-changing event, but ordinary content
+frames skip the blanket upload. Behavior-preserving; verified on macOS (expose/resize)
+and on a real iOS device.
