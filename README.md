@@ -195,6 +195,15 @@ analog (NFC, telephony, Android content providers/intents) it is a safe no-op
 returning the Android-shaped empty value. Full per-command status is in
 [`BORG-OSX.md`](BORG-OSX.md).
 
+## Demos menu in the console
+
+Launched bare — double-clicked, or `undroidwish` with no script — the arm64
+build adds a **File → Demos** submenu to the Tk console. It gathers a small
+`borg` bridge demo and a Bluetooth-LE debugger alongside the bundled AndroWish
+demos (widget tour, tkcon, tkinspect, tksqlite, …); entries whose package isn't
+bundled are greyed out. Launching with a script (`undroidwish <script>`) is
+unaffected — the menu only appears on a bare console launch.
+
 ## License
 
 The patches, scripts, and documentation in this repository are licensed under
