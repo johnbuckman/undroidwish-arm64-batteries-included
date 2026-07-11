@@ -175,6 +175,8 @@ final binary needs `/opt/homebrew/lib` on its rpath — see
 | `patches/05-borg-osx-tkBorgOSX.c.patch` | **new file** `jni/src/tkBorgOSX.c` — a desktop `borg` command for macOS (see [`BORG-OSX.md`](BORG-OSX.md)) |
 | `patches/06-borg-osx-build-undroidwish-macosx.patch` | build + bundle the `Borg` package into `assets.zip` |
 | `patches/08-sdl2tk-fullsync-dirty-rect.patch` | skip the per-present full-surface texture upload except after expose / full redraw (gate it on a new `SDLTKX_FULLSYNC` flag set in `SdlTkScreenRefresh`); steady-state frames upload only the dirty rects |
+| `patches/09-undroidwish-extras-tkzipmain-boot.patch` | auto-source a root `main.tcl` from the embedded zip on a bare launch (in `tkZipMain.c`'s interactive branch); see [`UNDROIDWISH-EXTRAS.md`](UNDROIDWISH-EXTRAS.md) |
+| `patches/10-undroidwish-extras-build-script.patch` | bundle `undroidwish-extras/` (borg/BLE demos, the `ble` package, boot `main.tcl`, borgdemo/bledemo shortcuts) into `assets.zip`; add a lowercase `borg` pkgIndex alias |
 
 Apply with `apply-patches.sh`, or individually with `git apply` / `patch -p1`
 from the AndroWish root.

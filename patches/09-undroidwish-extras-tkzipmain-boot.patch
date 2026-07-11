@@ -1,0 +1,28 @@
+diff --git a/jni/sdl2tk/generic/tkZipMain.c b/jni/sdl2tk/generic/tkZipMain.c
+index 4ae0bbd0..6bde717b 100644
+--- a/jni/sdl2tk/generic/tkZipMain.c
++++ b/jni/sdl2tk/generic/tkZipMain.c
+@@ -909,6 +909,23 @@ doit:
+ 
+ 	Tcl_SourceRCFile(interp);
+ 
++	/*
++	 * undroidwish: on a bare interactive launch (no startup script), auto-
++	 * source a main.tcl from the root of the embedded assets zip if one is
++	 * present.  The embedded zip is mounted on the executable path (above),
++	 * so [info nameofexecutable] is its root.  Only a build whose zip carries
++	 * a root main.tcl (i.e. undroidwish) is affected; running `wish <script>`
++	 * sets a startup script and takes the other branch, so this never fires
++	 * for de1plus / the demo dispatchers.
++	 */
++
++	Tcl_EvalEx(interp,
++	    "if {![catch {info nameofexecutable} __uwexe] && $__uwexe ne {}"
++	    " && [file exists [file join $__uwexe main.tcl]]} {"
++	    " catch {uplevel #0 [list source [file join $__uwexe main.tcl]]}"
++	    "}; catch {unset __uwexe}",
++	    -1, TCL_EVAL_GLOBAL);
++
+ 	/*
+ 	 * Establish a channel handler for stdin.
+ 	 */

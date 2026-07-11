@@ -281,3 +281,28 @@ redraw was requested (`SDLTKX_DRAWALL`: resize, pan/zoom, show/restore, init). S
 background guard still fires on every background-changing event, but ordinary content
 frames skip the blanket upload. Behavior-preserving; verified on macOS (expose/resize)
 and on a real iOS device.
+
+## I — undroidwish-extras: borg demo, BLE debugger, Debug menu, window placement (patches 09–10)
+
+Four conveniences brought over from iWish (the iOS/Catalyst port) to the arm64
+desktop build — see [`UNDROIDWISH-EXTRAS.md`](UNDROIDWISH-EXTRAS.md). All of it
+ships inside `assets.zip` and only affects a **bare** launch; `undroidwish
+<script>` (de1plus, the demo dispatchers) is untouched.
+
+* **Patch 09** (`jni/sdl2tk/generic/tkZipMain.c`) — stock undroidwish has no
+  per-launch startup script. Added a desktop equivalent of iWish's bundled
+  `main.tcl` autorun: in the interactive / no-startup-script branch, right after
+  `Tcl_SourceRCFile`, source `[info nameofexecutable]/main.tcl` if present (the
+  embedded zip is mounted on the executable path). **Gotcha:** the live
+  `Tk_MainEx` is in `tkZipMain.c` (pulled from the stub lib), not `tkMain.c` —
+  the hook must go there or it is dead code.
+* **Patch 10** (`undroid/build-undroidwish-macosx.sh`) — copy
+  `undroid/undroidwish-extras/` (boot `main.tcl`, `undroidwish-demos/`,
+  `ble1.0/`) into `assets/`, add `borgdemo`/`bledemo` dispatcher shortcuts, and
+  rewrite `Borg1.0/pkgIndex.tcl` to add a lowercase `borg` alias (`Borg_Init`
+  provides capital `Borg` only). The extras files are vendored in
+  [`undroidwish-extras/`](undroidwish-extras/) and placed by `apply-patches.sh`.
+
+The `ble` package uses the Developer-ID-signed, universal `ble_helper.bin`
+subprocess (no arm64 native dylib needed); its `ensure_helper` was patched to
+copy the helper out of the read-only zipfs to a real path before `exec`.

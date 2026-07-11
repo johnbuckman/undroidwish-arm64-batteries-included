@@ -43,4 +43,14 @@ for pf in "$PATCHES"/*.patch; do
         fi
     fi
 done
+
+# Place the vendored undroidwish-extras (borg/BLE demos, the tcl-ble-osx `ble`
+# package + signed helper, and the bare-launch boot script). Patch 10 makes the
+# build script copy these from undroid/undroidwish-extras/ into the assets zip.
+if [ -d "$HERE/undroidwish-extras" ]; then
+    mkdir -p "$AW/undroid/undroidwish-extras"
+    cp -Rp "$HERE/undroidwish-extras/." "$AW/undroid/undroidwish-extras/"
+    chmod +x "$AW/undroid/undroidwish-extras/ble1.0/bin/ble_helper.bin" 2>/dev/null || true
+    echo "placed: undroid/undroidwish-extras/"
+fi
 echo "done."

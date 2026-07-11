@@ -1,0 +1,35 @@
+diff --git a/undroid/build-undroidwish-macosx.sh b/undroid/build-undroidwish-macosx.sh
+index 1ef436c9..b197bb60 100755
+--- a/undroid/build-undroidwish-macosx.sh
++++ b/undroid/build-undroidwish-macosx.sh
+@@ -1959,6 +2002,30 @@ echo -n "wrap single-file Tcl/Tk binary ... "
+     # add contents of tclJBlend.jar for JVM
+     ( cd assets ; unzip -q tclJBlend*/tclJBlend.jar )
+   fi
++  # undroidwish-extras: borg/BLE demos, the tcl-ble-osx `ble` package, the
++  # bare-launch boot script (Debug menu + window placement, auto-sourced by the
++  # tkZipMain.c hook), the borgdemo/bledemo dispatcher shortcuts, and a lowercase
++  # `borg` alias in the Borg pkgIndex (Borg_Init provides capital "Borg" only).
++  UWX=${AWDIR}/undroid/undroidwish-extras
++  if test -d ${UWX} ; then
++    cp -p  ${UWX}/main.tcl assets/main.tcl
++    cp -rp ${UWX}/undroidwish-demos assets/undroidwish-demos
++    cp -rp ${UWX}/ble1.0 assets/ble1.0
++    chmod +x assets/ble1.0/bin/ble_helper.bin
++    ( cd assets
++      echo 'source [file dirname [info script]]/undroidwish-demos/borgdemo.tcl' > borgdemo
++      echo 'source [file dirname [info script]]/undroidwish-demos/bledemo.tcl'  > bledemo
++    )
++    if test -f assets/Borg1.0/pkgIndex.tcl ; then
++      cat > assets/Borg1.0/pkgIndex.tcl <<'EOB'
++# Borg_Init (tkBorgOSX.c) calls Tcl_PkgProvide as capital "Borg", so the real
++# package is "Borg"; keep a lowercase "borg" alias (what the demos / de1app
++# `package require borg`). Loading either registers the lowercase `borg` command.
++package ifneeded Borg 1.0 [list load [file join $dir libBorg1.0.dylib] Borg]
++package ifneeded borg 1.0 {package require Borg; package provide borg 1.0}
++EOB
++    fi
++  fi
+   # tcl minizip script using zipfs with cmd line like zipfs::mkzip
+   cat >minizip.tcl <<'EOD'
+   package require zipfs
