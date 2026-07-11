@@ -17,6 +17,16 @@ and the Tcl regression suite passes (46090 tests, 1 environment-only failure).
 See [`CHANGES.md`](CHANGES.md) for a detailed, rationale-by-rationale account of
 everything that had to change from stock undroidwish.
 
+## Talk & slides
+
+A conference talk on this port — *undroidwish for Apple Silicon Macs* — covers
+why the native arm64 build matters (Apple is retiring Rosetta 2 after macOS 27),
+benchmarks arm64 vs x86-under-Rosetta on an M4 MacBook Air (~1.5× on compute,
+1.25× on cold startup), and the reintroduced `borg` and `ble` commands. Slides:
+
+- [`presentation/undroidwish-apple-silicon.pdf`](presentation/undroidwish-apple-silicon.pdf) — PDF
+- [`presentation/undroidwish-apple-silicon.pptx`](presentation/undroidwish-apple-silicon.pptx) — PowerPoint source
+
 ## Why it's needed
 
 Stock undroidwish builds x86-64 on macOS. Building it for arm64 surfaces a chain
