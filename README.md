@@ -19,12 +19,13 @@ everything that had to change from stock undroidwish.
 
 ## Talk & slides
 
-A conference talk on this port — *undroidwish for Apple Silicon Macs* — covers
-why the native arm64 build matters (Apple is retiring Rosetta 2 after macOS 27),
-benchmarks arm64 vs x86-under-Rosetta on an M4 MacBook Air (~1.5× on compute,
-1.25× on cold startup), and the reintroduced `borg` and `ble` commands. Slides:
+The EuroTcl 2026 talk on this port — *undroidwish for Apple Silicon Macs* —
+covers why the native arm64 build matters (Apple is retiring Rosetta 2 after
+macOS 27), benchmarks arm64 vs x86-under-Rosetta on an M4 MacBook Air (~1.5× on
+compute, 1.25× on cold startup), the reintroduced `borg` and `ble` commands, and
+the File → Demos console menu. The full deck (13 slides):
 
-- [`presentation/undroidwish-apple-silicon.pdf`](presentation/undroidwish-apple-silicon.pdf) — PDF
+- [`presentation/undroidwish-apple-silicon.pdf`](presentation/undroidwish-apple-silicon.pdf) — PDF (renders in the browser on GitHub)
 - [`presentation/undroidwish-apple-silicon.pptx`](presentation/undroidwish-apple-silicon.pptx) — PowerPoint source
 
 ## Why it's needed
