@@ -29,13 +29,78 @@ benchmarks arm64 vs x86-under-Rosetta on an M4 MacBook Air (~1.5× on compute,
 
 ## Why it's needed
 
-Stock undroidwish builds x86-64 on macOS. Building it for arm64 surfaces a chain
-of issues, the central one being that AndroWish's SDL2 `configure` treats the
-Apple-Silicon Mac (host triple `arm64-apple-darwin…`) as **iOS** — enabling
-UIKit/OpenGL ES and disabling Cocoa — because its iOS branch label
-`arm*-apple-darwin*` swallows arm64 Macs. The rest are modern-clang strictness,
-ancient-autoconf probes, x86-only SIMD paths, and a couple of bundled-library
-codec gaps. All are documented and patched here.
+**Apple is retiring Rosetta 2.** At WWDC 2025 Apple said Rosetta would stay only
+"for the next two major macOS releases — through macOS 27"; macOS 26.4 (Feb 2026)
+already pops a warning when you launch an Intel-only app, and macOS 28 (expected
+fall 2027) removes it. A stock x86-64 undroidwish runs on Apple Silicon **only**
+through that translation layer — so once Rosetta is gone, so is the stock build.
+A native arm64 binary is how AndroWish/Tk apps (e.g. [de1app](https://github.com/decentespresso/de1app))
+keep running on the Mac.
+
+Going native is also just faster — there's no translation overhead:
+
+![undroidwish running natively on Apple Silicon, with the borg desktop bridge reporting manufacturer Apple / model Mac16,12 / cpu_abi arm64](presentation/img/undroidwish-arm64-widgetdemo-borg.jpg)
+
+*undroidwish arm64 running the Tk widget demo next to the reintroduced `borg`
+desktop bridge — `borg osbuildinfo` reports the real Apple values
+(`manufacturer Apple`, `model Mac16,12`, `cpu_abi arm64`).*
+
+### Benchmarks — arm64 native vs x86 under Rosetta 2
+
+Median of 5 runs on an M4 MacBook Air (macOS 26). Higher is better:
+
+| workload | speed-up (geometric mean) |
+|---|---|
+| Startup (launch → ready) | **1.25×** (20% faster) |
+| Math (int / float / trig / fib) | **1.47×** (~47% faster) |
+| General Tcl (string / list / dict / regexp / array / binary) | **1.53×** (~53% faster) |
+| Tk (widgets / canvas / text) | **1.31×** (~31% faster) |
+| **Overall micro-benchmarks** | **1.46×** (~46% faster) |
+
+So dropping Rosetta buys roughly **1.5× on compute** and **1.25× on cold
+startup** — on top of surviving the macOS 27/28 cutoff.
+
+<details>
+<summary>Full per-metric results (ms, median of 5)</summary>
+
+| metric | x86 ms | arm64 ms | faster |
+|---|---:|---:|---:|
+| startup (launch → ready) | 531.7 | 425.0 | 1.25× |
+| math.int | 954.1 | 583.4 | 1.64× |
+| math.float | 894.7 | 623.0 | 1.44× |
+| math.trig | 519.7 | 336.4 | 1.54× |
+| math.fib_recursion | 422.6 | 281.4 | 1.50× |
+| math.bignum | 44.6 | 34.9 | 1.28× |
+| str.append | 47.4 | 28.9 | 1.64× |
+| str.map_regsub | 320.2 | 260.0 | 1.23× |
+| str.format | 284.0 | 184.1 | 1.54× |
+| list.build_sort | 137.7 | 83.1 | 1.66× |
+| list.foreach_search | 125.3 | 59.2 | 2.12× |
+| dict.set_get | 396.5 | 265.7 | 1.49× |
+| regexp.match | 1258.9 | 982.5 | 1.28× |
+| array.set_get | 157.7 | 110.0 | 1.43× |
+| binary.format_scan | 167.7 | 109.1 | 1.54× |
+| tk.widget_create | 20.6 | 15.5 | 1.33× |
+| tk.canvas_items | 12.0 | 9.5 | 1.26× |
+| tk.canvas_redraw | 124.3 | 95.4 | 1.30× |
+| tk.text_insert | 4.3 | 3.2 | 1.34× |
+
+Two caveats: the two builds also differ by a Tcl minor bump (8.6.9 → 8.6.10), so
+this is a real-world build-to-build comparison, not pure arch isolation; and the
+Tk gains are the smallest because much of that work is SDL surface blitting on
+the GPU (instruction-set translation doesn't touch it), so CPU-heavy math and
+list work shows the biggest native win.
+</details>
+
+### What's hard about the arm64 build
+
+Building undroidwish for arm64 surfaces a chain of issues, the central one being
+that AndroWish's SDL2 `configure` treats the Apple-Silicon Mac (host triple
+`arm64-apple-darwin…`) as **iOS** — enabling UIKit/OpenGL ES and disabling
+Cocoa — because its iOS branch label `arm*-apple-darwin*` swallows arm64 Macs.
+The rest are modern-clang strictness, ancient-autoconf probes, x86-only SIMD
+paths, and a couple of bundled-library codec gaps. All are documented and
+patched here.
 
 ## Prerequisites
 
