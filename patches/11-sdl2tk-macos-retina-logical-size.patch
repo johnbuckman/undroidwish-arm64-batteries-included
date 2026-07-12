@@ -1,0 +1,82 @@
+diff --git a/jni/sdl2tk/sdl/SdlTkX.c b/jni/sdl2tk/sdl/SdlTkX.c
+--- a/jni/sdl2tk/sdl/SdlTkX.c
++++ b/jni/sdl2tk/sdl/SdlTkX.c
+@@ -4781,6 +4781,13 @@
+ 	SdlTkX.sdlsurf = newsurf;
+ 	SDL_DestroyTexture(SdlTkX.sdltex);
+ 	SdlTkX.sdltex = newtex;
++#if defined(__APPLE__) && defined(TARGET_OS_OSX) && TARGET_OS_OSX
++	/* Keep the present scaled to the (possibly Retina) drawable after a
++	 * root/window resize -- surf/tex were just recreated at the new point
++	 * size, so re-assert the matching logical size. See the RenderSetLogicalSize
++	 * note in the display-open path. No-op when the display scale is 1. */
++	SDL_RenderSetLogicalSize(SdlTkX.sdlrend, width, height);
++#endif
+ 	if ((r->width == 0) && (r->height == 0)) {
+ 	    SdlTkX.root_w = 0;
+ 	    SdlTkX.root_h = 0;
+@@ -6101,9 +6108,42 @@
+      * so de1app fills only ~75% and leaves margins. A logical size == the screen
+      * makes SDL scale the present to fill the whole drawable (and scales mouse
+      * input to match), so the 1280x800 UI fills the window. */
++    SDL_RenderSetLogicalSize(SdlTkX.sdlrend, width, height);
++#elif defined(__APPLE__) && defined(TARGET_OS_OSX) && TARGET_OS_OSX
++    /*
++     * macOS desktop Retina fix: on a built-in Retina (HiDPI) panel the Cocoa
++     * GL/Metal drawable comes out at window-POINT size x the backing scale
++     * factor (2x on Retina), while SdlTk renders into sdlsurf/sdltex at
++     * window-POINT size (width x height). With no logical size the renderer's
++     * viewport tracks the point size, so RenderCopy lands the texture in only a
++     * (1/scale)^2 corner of the larger drawable -- "only a portion of the screen
++     * is used for drawing" on the laptop's Retina display. Non-Retina external
++     * displays (scale 1) never hit it, and a scaled 1x mode also dodges it.
++     * A logical size == the point size makes SDL scale the present to fill the
++     * whole drawable and maps mouse input back; when scale is 1 it is a no-op.
++     * (Same mechanism/fix as the Catalyst branch above; kept in sync in the
++     * root-resize path, see HandleRootSize.) */
+     SDL_RenderSetLogicalSize(SdlTkX.sdlrend, width, height);
+ #endif
+ #ifndef ANDROID
++    /* Env-gated one-shot proof of the Retina backing-scale mismatch: set
++     * UNDROIDWISH_DPI_LOG=1 to print the window (points), drawable (pixels)
++     * and SdlTk surface sizes at startup. On a Retina panel drawable == 2x
++     * window; on a non-Retina display they match. Harmless when unset. */
++    if (getenv("UNDROIDWISH_DPI_LOG") != NULL) {
++	int ww = 0, wh = 0, ow = 0, oh = 0, lw = 0, lh = 0;
++
++	SDL_GetWindowSize(SdlTkX.sdlscreen, &ww, &wh);
++	SDL_GetRendererOutputSize(SdlTkX.sdlrend, &ow, &oh);
++	SDL_RenderGetLogicalSize(SdlTkX.sdlrend, &lw, &lh);
++	fprintf(stderr,
++		"[undroidwish dpi] window(points)=%dx%d drawable(pixels)=%dx%d "
++		"surface=%dx%d logical=%dx%d\n",
++		ww, wh, ow, oh, width, height, lw, lh);
++	fflush(stderr);
++    }
++#endif
++#ifndef ANDROID
+ #ifdef __APPLE__
+     /*
+      * Do not create a GL context here, otherwise something internal
+diff --git a/jni/sdl2tk/sdl/SdlTkGfx.c b/jni/sdl2tk/sdl/SdlTkGfx.c
+--- a/jni/sdl2tk/sdl/SdlTkGfx.c
++++ b/jni/sdl2tk/sdl/SdlTkGfx.c
+@@ -162,8 +162,17 @@
+ 	int ow = 0, oh = 0;
+ 	SDL_Rect dst;
+ 
+-	SDL_GetRendererOutputSize(rend, &ow, &oh);
++	/* Place the toast in the renderer's LOGICAL coordinate space when one is
++	 * set (macOS Retina / Catalyst use SDL_RenderSetLogicalSize so the present
++	 * fills the HiDPI drawable). RenderCopy's dst rect is interpreted in that
++	 * logical space, so using the raw output (drawable-pixel) size here would
++	 * push the toast off-screen by the backing-scale factor. Fall back to the
++	 * output size when no logical size is in effect. */
++	SDL_RenderGetLogicalSize(rend, &ow, &oh);
+ 	if ((ow <= 0) || (oh <= 0)) {
++	    SDL_GetRendererOutputSize(rend, &ow, &oh);
++	}
++	if ((ow <= 0) || (oh <= 0)) {
+ 	    ow = tw;
+ 	    oh = th;
+ 	}

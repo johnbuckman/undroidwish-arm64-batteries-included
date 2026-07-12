@@ -163,6 +163,20 @@ TARGET_OS_MACCATALYST`:
 IOKit + CoreFoundation are already linked (SDL2 itself references
 `_IOPSCopyPowerSourcesInfo`); if you relink standalone, add `-framework IOKit`.
 
+### D2. macOS Retina — UI drew into only a corner (`patches/11-sdl2tk-macos-retina-logical-size.patch`)
+On a **built-in Retina** display the UI filled only a quarter (corner) of the
+window; non-Retina external displays were fine. sdl2tk renders Tk into a
+point-sized surface/texture and `RenderCopy`s it, but the Cocoa drawable is
+`points × backing-scale` (2× on Retina), and with no logical size the renderer
+viewport tracks the point size → the texture lands in a `(1/scale)²` corner of
+the larger drawable. Fixed by calling `SDL_RenderSetLogicalSize(rend, width,
+height)` on the native macOS build (`#elif ... TARGET_OS_OSX`), mirroring the
+Catalyst path that already did this — a no-op at scale 1, so external displays
+are unaffected. Also re-asserted on root resize, and the `borg` toast overlay
+switched to `SDL_RenderGetLogicalSize` so it isn't pushed off-screen. Adds an
+env-gated `UNDROIDWISH_DPI_LOG=1` startup probe. **Full write-up:
+[`RETINA-FIX.md`](RETINA-FIX.md).**
+
 ---
 
 ## E. Batteries / extensions
