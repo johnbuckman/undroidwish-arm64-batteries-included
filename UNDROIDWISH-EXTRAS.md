@@ -29,9 +29,10 @@ makes `build-undroidwish-macosx.sh` fold them into `assets.zip`.
    (widget, tkcon, tkinspect, tksqlite, tkchat, 3ddemo). Unbundled entries grey
    out.
 
-4. **Initial window placement** — `main.tcl` puts the main `.` window near the
-   top-left (`+20+20`) and centers the console, deferred so Tk has mapped the
-   windows first.
+4. **Initial window placement** — `main.tcl` lays the two bare-launch windows out
+   side by side so they don't overlap: the main `.` window at the top-left
+   (`+2+50`), and the console just to its right (past the main window's measured
+   width + a small gap). Deferred so Tk has mapped the windows first.
 
 ## How the boot script auto-runs (patch 09)
 

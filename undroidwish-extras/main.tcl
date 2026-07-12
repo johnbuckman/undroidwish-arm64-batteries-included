@@ -135,28 +135,29 @@ proc uw_install_demos_menu {{tries 0}} {
 after 300 uw_install_demos_menu
 
 # --- initial window placement ------------------------------------------------
-# Main "." window near the top-left; console centered on the screen. Deferred so
-# Tk has mapped the windows first; the console lives in its own interp.
+# Lay the two windows out side by side so they don't overlap by default: the
+# main "." window at the top-left (2px in, 50px down), and the console just to
+# its right (past the main window's width + a gap). Deferred so Tk has mapped
+# the windows first; the console lives in its own interp.
 catch {wm title . "undroidwish"}
 after 300 {catch {console show}}
-after 300 {catch {wm geometry . +20+20}}
-proc uw_center_console {{tries 0}} {
+after 300 {catch {wm geometry . +2+50}}
+proc uw_place_console {{tries 0}} {
     if {[catch {console eval {winfo exists .}} ok] || !$ok} {
-        if {$tries < 60} { after 150 [list uw_center_console [expr {$tries+1}]] }
+        if {$tries < 60} { after 150 [list uw_place_console [expr {$tries+1}]] }
         return
     }
-    catch {console eval {
+    # Measure the main "." window (this interp) so the console clears it.
+    update idletasks
+    set mw [winfo width .];  if {$mw <= 1} { set mw [winfo reqwidth .] }
+    set cx [expr {2 + $mw + 22}]   ;# 2px left margin + main width + 22px gap
+    set cy 50
+    if {$cx < 0} { set cx 0 }
+    catch {console eval [format {
         wm title . "undroidwish console"
-        update idletasks
-        set w [winfo width .];  if {$w <= 1} { set w [winfo reqwidth .] }
-        set h [winfo height .]; if {$h <= 1} { set h [winfo reqheight .] }
-        set x [expr {([winfo screenwidth .]  - $w) / 2}]
-        set y [expr {([winfo screenheight .] - $h) / 2}]
-        if {$x < 0} { set x 0 }
-        if {$y < 0} { set y 0 }
-        wm geometry . +$x+$y
-    }}
-    _uwlog "placement: console centered"
+        wm geometry . +%d+%d
+    } $cx $cy]}
+    _uwlog "placement: console beside main (+$cx+$cy)"
 }
-after 300 uw_center_console
+after 300 uw_place_console
 _uwlog "boot: main.tcl scheduled afters"
